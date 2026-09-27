@@ -8,3 +8,14 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Harness runs (disposable repository copies and traces)
+.harness/
+
+# Local settings; copy harness.example.toml
+harness.toml
+
+# Target repository clone (recorded in harness.example.toml by URL and commit)
+/code/
+
+.DS_Store

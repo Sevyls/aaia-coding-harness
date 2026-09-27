@@ -1,2 +1,4 @@
 def main() -> None:
-    print("Hello from coding-harness!")
+    from coding_harness.cli import app
+
+    app()

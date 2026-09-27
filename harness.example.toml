@@ -1,0 +1,54 @@
+# Harness settings. Copy to harness.toml. No secrets are needed for a local Ollama model.
+# Relative paths are relative to this file.
+
+workspace_dir = ".harness/runs"
+
+[model]
+provider = "ollama"
+name = "qwen3.8:27b"           # qwen2.5-coder:3b is faster but guesses and misses files
+host = "http://localhost:11434"
+temperature = 0.0
+request_timeout = 600
+
+[target]
+# https://github.com/cosmicpython/code, cloned into ./code
+source = "code"
+commit = "14c84797ffa77255d53cf1a02fe6aafda2b68aeb"
+scope = """
+Change only src/allocation/service_layer/handlers.py and, if needed,
+src/allocation/domain/model.py. Do not modify or delete existing tests.
+"""
+
+[limits]
+max_steps = 30              # model requests
+max_actions = 40            # tool requests, executed or denied
+max_denied = 5
+max_repeated_actions = 4    # identical consecutive requests; 0 disables
+max_model_retries = 2
+tool_output_chars = 8000    # longer tool results are shortened and marked
+
+[sandbox]
+engine = "podman"
+image = "harness-cosmic-python"
+network = "none"
+memory = "1g"
+cpus = 2
+pids_limit = 256
+repo_read_only = true       # only the harness file tools write to the repository
+command_timeout = 180
+output_limit = 20000
+
+# Commands the agent may run by name with run_check. Unit tests need no database.
+[checks]
+unit_tests = ["pytest", "-p", "no:cacheprovider", "tests/unit"]
+
+[verification]
+# Kept outside the agent's writable area; mounted read-only at /acceptance for final checks only.
+acceptance_dir = "acceptance"
+
+[verification.acceptance]
+# tasks/invalid-quantity.md: must fail on the starting commit, pass after the fix
+acceptance = ["pytest", "-p", "no:cacheprovider", "/acceptance"]
+
+[verification.regression]
+unit_tests = ["pytest", "-p", "no:cacheprovider", "tests/unit"]
