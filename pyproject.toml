@@ -1,0 +1,28 @@
+[project]
+name = "coding-harness"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Michael Auß", email = "michael.auss@posteo.at" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "ollama>=0.6.2",
+    "pydantic>=2.13.5",
+    "rich>=15.0.0",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+coding-harness = "coding_harness:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-timeout>=2.4.0",
+]
