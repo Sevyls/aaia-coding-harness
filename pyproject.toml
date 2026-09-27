@@ -1,7 +1,7 @@
 [project]
 name = "coding-harness"
 version = "0.1.0"
-description = "Add your description here"
+description = "A small coding harness: a task goes in, a reviewable diff comes out."
 readme = "README.md"
 authors = [
     { name = "Michael Auß", email = "michael.auss@posteo.at" }
@@ -26,3 +26,8 @@ dev = [
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+timeout = 60
