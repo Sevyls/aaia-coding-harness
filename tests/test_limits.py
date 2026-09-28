@@ -1,6 +1,6 @@
 """Action, step, repeat, output and retry limits stop the run or bound what the model sees."""
 
-from coding_harness.domain import StopReason
+from coding_harness.domain import ModelResponse, StopReason, ToolCall
 from coding_harness.model_client import ModelError
 from coding_harness.output import shorten
 
@@ -69,3 +69,15 @@ def test_model_errors_beyond_retry_limit_stop_the_run(repo):
     assert outcome.stop_reason is StopReason.MODEL_ERROR
     assert outcome.stats.retries == 1
     assert outcome.stats.model_calls == 2
+
+
+def test_token_usage_is_summed_and_largest_prompt_kept(repo):
+    replies = [
+        ModelResponse(tool_calls=[ToolCall("list_files", {})], prompt_tokens=1000, completion_tokens=20),
+        ModelResponse(content="done", prompt_tokens=1500, completion_tokens=10),
+    ]
+    controller, _, _ = make_controller(repo, replies)
+
+    stats = controller.run_task("task").stats
+
+    assert (stats.prompt_tokens, stats.completion_tokens, stats.max_prompt_tokens) == (2500, 30, 1500)

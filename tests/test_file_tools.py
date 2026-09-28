@@ -103,3 +103,26 @@ def test_symlink_pointing_outside_is_rejected(tools, repo):
     with pytest.raises(PermissionDenied):
         tools.write_file("link.txt", "overwritten")
     assert (repo.parent / "secret.txt").read_text() == "host secret"
+
+
+def test_edit_that_breaks_python_syntax_is_rejected(tools, repo):
+    before = (repo / "shop" / "pricing.py").read_text()
+    with pytest.raises(ToolError, match=r"syntax error in shop/pricing.py \(line 2"):
+        tools.edit_file("shop/pricing.py", "return sum(prices) - 1", "return sum(prices")
+    assert (repo / "shop" / "pricing.py").read_text() == before
+
+
+def test_write_of_invalid_python_is_rejected_and_creates_nothing(tools, repo):
+    with pytest.raises(ToolError, match="the file was not changed"):
+        tools.write_file("shop/new/tax.py", "def rate(:\n    return 20\n")
+    assert not (repo / "shop" / "new").exists()
+
+
+def test_syntax_guardrail_only_applies_to_python_files(tools, repo):
+    assert tools.write_file("notes.txt", "def rate(:").startswith("created")
+
+
+def test_already_broken_python_file_may_still_be_edited(tools, repo):
+    (repo / "broken.py").write_text("x = (\ny = 1\n")
+    tools.edit_file("broken.py", "y = 1", "y = 2")
+    assert "y = 2" in (repo / "broken.py").read_text()

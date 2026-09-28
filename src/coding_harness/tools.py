@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
+import warnings
 from pathlib import Path
 
 SKIPPED_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache", ".pytest_cache"}
@@ -114,7 +116,7 @@ class RepositoryTools:
                 f"old_text occurs {count} times in {path!r}; include more surrounding lines "
                 "so it is unique"
             )
-        self._write_text(target, text.replace(old_text, new_text, 1))
+        self._write_text(target, text.replace(old_text, new_text, 1), previous=text)
         return (
             f"edited {self.display(target)}: replaced {old_text.count(chr(10)) + 1} line(s) "
             f"with {new_text.count(chr(10)) + 1} line(s)"
@@ -124,9 +126,9 @@ class RepositoryTools:
         target = self.resolve(path)
         if target.is_dir():
             raise ToolError(f"{path!r} is a directory")
-        existed = target.exists()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        self._write_text(target, content)
+        existed = target.is_file()
+        previous = self._read_text(target, path) if existed else None
+        self._write_text(target, content, previous=previous)
         action = "overwrote" if existed else "created"
         return f"{action} {self.display(target)} ({len(content)} characters)"
 
@@ -145,10 +147,42 @@ class RepositoryTools:
         except UnicodeDecodeError:
             raise ToolError(f"{path!r} is not a UTF-8 text file") from None
 
-    def _write_text(self, target: Path, content: str) -> None:
+    def _write_text(self, target: Path, content: str, previous: str | None) -> None:
+        """Write after the guardrails pass; a rejected write leaves the file system unchanged."""
         if len(content) > self.max_write_chars:
             raise PermissionDenied(
                 f"write of {len(content)} characters exceeds the limit of {self.max_write_chars}"
             )
+        if target.suffix == ".py":
+            self._check_syntax(target, content, previous)
+        target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("w", encoding="utf-8", newline="") as handle:
             handle.write(content)
+
+    def _check_syntax(self, target: Path, content: str, previous: str | None) -> None:
+        """Reject a change that turns valid Python into invalid Python (SWE-agent's edit guardrail).
+
+        Only parses the code, never runs it. A file that was already broken may still be edited.
+        """
+        error = _syntax_error(content)
+        if error is None or (previous is not None and _syntax_error(previous) is not None):
+            return
+        lines = content.splitlines()
+        line = lines[error.lineno - 1].strip() if error.lineno and error.lineno <= len(lines) else ""
+        raise ToolError(
+            f"rejected: the change would introduce a syntax error in {self.display(target)} "
+            f"(line {error.lineno}: {error.msg}: {line!r}); the file was not changed. "
+            "Check indentation and brackets, then try again."
+        )
+
+
+def _syntax_error(source: str) -> SyntaxError | None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # e.g. invalid escape sequences are not our concern here
+        try:
+            ast.parse(source)
+        except SyntaxError as exc:
+            return exc
+        except ValueError as exc:  # e.g. NUL bytes
+            return SyntaxError(str(exc))
+    return None

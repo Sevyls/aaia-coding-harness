@@ -53,13 +53,18 @@ def run_task(
     )
     # The agent's environment has no acceptance mount: it never sees the acceptance check.
     registry = build_toolset(repo_tools, env_factory(workspace.repo, []), config.checks)
-    controller = AgentController(model or create_model_client(config.model), registry, limits, on_event)
 
-    task_message = build_task_message(task, config.target.scope, list(config.checks))
-    outcome = controller.run_task(task_message)
-    if on_event:
-        on_event(Event("verification", 0))
-    verification = _verification(config, workspace, env_factory).run(workspace)
+    with EventLog(workspace.run_dir / "events.jsonl", forward=on_event) as log:
+        log(Event("run_started", 0, {"task": task, "commit": workspace.commit, "model": config.model.name}))
+        controller = AgentController(model or create_model_client(config.model), registry, limits, log)
+        outcome = controller.run_task(build_task_message(task, config.target.scope, list(config.checks)))
+        log(Event("verification", 0))
+        verification = _verification(config, workspace, env_factory).run(workspace)
+        log(Event("verification_done", 0, {
+            "verified": verification.verified,
+            "checks": {c.name: str(c.status) for c in verification.checks},
+            "changed_files": verification.changed_files,
+        }))  # fmt: skip
     return _finish(RunReport(task, workspace, outcome, verification, workspace.run_dir / "trace.json"))
 
 
@@ -69,6 +74,29 @@ def run_baseline(config: HarnessConfig, *, env_factory: EnvFactory | None = None
     workspace = Workspace.create(config.target.source, config.target.commit, config.workspace_dir)
     verification = _verification(config, workspace, env_factory).run(workspace)
     return _finish(RunReport(None, workspace, None, verification, workspace.run_dir / "trace.json"))
+
+
+class EventLog:
+    """Appends each event to a JSON Lines file the moment it happens, then forwards it.
+
+    trace.json is only written at the end; this log survives a crash in the middle of a run.
+    """
+
+    def __init__(self, path: Path, forward: Callable[[Event], None] | None = None) -> None:
+        self._handle = path.open("a", encoding="utf-8")
+        self._forward = forward
+
+    def __call__(self, event: Event) -> None:
+        self._handle.write(json.dumps(asdict(event), default=str) + "\n")
+        self._handle.flush()
+        if self._forward is not None:
+            self._forward(event)
+
+    def __enter__(self) -> EventLog:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self._handle.close()
 
 
 def _container_factory(config: HarnessConfig) -> EnvFactory:

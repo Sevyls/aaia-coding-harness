@@ -9,6 +9,7 @@ name = "qwen3.8:27b"           # qwen2.5-coder:3b is faster but guesses and miss
 host = "http://localhost:11434"
 temperature = 0.0
 request_timeout = 600
+# context_window = 32768       # Ollama num_ctx; unset uses the server's default
 
 [target]
 # https://github.com/cosmicpython/code, cloned into ./code

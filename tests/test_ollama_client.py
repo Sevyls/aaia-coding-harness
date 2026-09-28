@@ -11,14 +11,15 @@ from coding_harness.domain import ToolCall
 from coding_harness.model_client import ModelError, OllamaClient, parse_text_tool_calls
 
 
-def client_returning(message: dict, seen: list):
+def client_returning(message: dict, seen: list, config: ModelConfig | None = None):
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(json.loads(request.content))
-        body = {"model": "m", "created_at": "2026-01-01T00:00:00Z", "message": message, "done": True}
+        body = {"model": "m", "created_at": "2026-01-01T00:00:00Z", "message": message, "done": True,
+                "prompt_eval_count": 1234, "eval_count": 56}  # fmt: skip
         return httpx.Response(200, json=body)
 
-    return OllamaClient(ModelConfig(name="m"), ollama.Client(host="http://ollama.test",
-                                                             transport=httpx.MockTransport(handler)))  # fmt: skip
+    return OllamaClient(config or ModelConfig(name="m"),
+                        ollama.Client(host="http://ollama.test", transport=httpx.MockTransport(handler)))  # fmt: skip
 
 
 def test_native_tool_calls_are_parsed_and_history_is_accepted():
@@ -40,6 +41,23 @@ def test_native_tool_calls_are_parsed_and_history_is_accepted():
     sent = seen[0]
     assert sent["model"] == "m" and sent["options"]["temperature"] == 0.0
     assert sent["messages"][2] == {"role": "tool", "tool_name": "list_files", "content": "a.py"}
+
+
+def test_token_usage_is_reported_and_context_window_is_sent():
+    seen = []
+    client = client_returning({"role": "assistant", "content": "ok"}, seen,
+                              ModelConfig(name="m", context_window=32768))  # fmt: skip
+
+    response = client.request_action([], [])
+
+    assert (response.prompt_tokens, response.completion_tokens) == (1234, 56)
+    assert seen[0]["options"]["num_ctx"] == 32768
+
+
+def test_context_window_is_left_to_the_server_by_default():
+    seen = []
+    client_returning({"role": "assistant", "content": "ok"}, seen).request_action([], [])
+    assert "num_ctx" not in seen[0]["options"]
 
 
 def test_tool_call_written_as_text_is_recovered():

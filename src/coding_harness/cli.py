@@ -120,7 +120,9 @@ def _show_report(report: harness.RunReport) -> None:
             escape(outcome.final_message.strip() or "(no message)"),
             title=f"Agent result: {outcome.stop_reason} ({claim})",
             subtitle=(f"model calls {stats.model_calls} · actions {stats.actions} · executed {stats.executed}"
-                      f" · denied {stats.denied} · failed {stats.failed} · retries {stats.retries}"),
+                      f" · denied {stats.denied} · failed {stats.failed} · retries {stats.retries}"
+                      f" · tokens {stats.prompt_tokens} in / {stats.completion_tokens} out"
+                      f" · largest prompt {stats.max_prompt_tokens}"),
         ))  # fmt: skip
 
     console.rule("[bold]Changed files")

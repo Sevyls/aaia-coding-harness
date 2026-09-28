@@ -20,6 +20,8 @@ class ToolCall:
 class ModelResponse:
     content: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    prompt_tokens: int | None = None  # as reported by the model server, if it reports them
+    completion_tokens: int | None = None
 
 
 class ToolStatus(StrEnum):
@@ -84,6 +86,9 @@ class RunStats:
     denied: int = 0
     failed: int = 0
     retries: int = 0  # repeated model requests after a model error
+    prompt_tokens: int = 0  # summed over all model requests
+    completion_tokens: int = 0
+    max_prompt_tokens: int = 0  # largest single prompt: how full the context window got
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,6 @@
 """Failed or unavailable checks stay visible, even when the model claims it is done."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -102,3 +103,22 @@ def test_baseline_runs_checks_on_the_untouched_commit(git_repo, tmp_path):
     assert report.outcome is None
     assert report.verification.changed_files == []
     assert not report.verified
+
+
+def test_events_are_logged_as_they_happen_and_survive_a_crash(git_repo, tmp_path):
+    class BrokenVerificationEnv(FakeEnvironment):
+        def run(self, command, *, timeout=None):
+            raise RuntimeError("container engine crashed")
+
+    envs = iter([FakeEnvironment(), BrokenVerificationEnv()])  # agent first, then verification
+    model = ScriptedModelClient([call("list_files"), done("finished")])
+
+    with pytest.raises(RuntimeError, match="crashed"):
+        harness.run_task(make_config(git_repo, tmp_path), "task", model=model,
+                         env_factory=lambda repo, mounts: next(envs))  # fmt: skip
+
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    assert not (run_dir / "trace.json").exists()  # the summary is written only at the end...
+    lines = (run_dir / "events.jsonl").read_text().splitlines()
+    kinds = [json.loads(line)["kind"] for line in lines]
+    assert kinds[0] == "run_started" and "tool_result" in kinds and kinds[-1] == "verification"

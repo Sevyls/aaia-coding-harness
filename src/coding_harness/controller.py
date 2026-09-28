@@ -77,10 +77,13 @@ class AgentController:
             if response is None:
                 return StopReason.MODEL_ERROR, "the model could not be reached"
             messages.append(_assistant_message(response))
+            self._count_tokens(response)
             self._emit(
                 "model_reply",
                 content=response.content,
                 tool_calls=[{"name": c.name, "arguments": c.arguments} for c in response.tool_calls],
+                prompt_tokens=response.prompt_tokens,
+                completion_tokens=response.completion_tokens,
             )
             if not response.tool_calls:
                 return StopReason.COMPLETED, response.content
@@ -122,6 +125,12 @@ class AgentController:
                 if attempt < attempts:
                     self._stats.retries += 1
         return None
+
+    def _count_tokens(self, response: ModelResponse) -> None:
+        stats = self._stats
+        stats.prompt_tokens += response.prompt_tokens or 0
+        stats.completion_tokens += response.completion_tokens or 0
+        stats.max_prompt_tokens = max(stats.max_prompt_tokens, response.prompt_tokens or 0)
 
     def _execute(self, call: ToolCall) -> ToolResult:
         self._emit("tool_call", name=call.name, arguments=call.arguments)

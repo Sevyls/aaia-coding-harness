@@ -27,6 +27,7 @@ class ModelConfig(_Section):
     temperature: float = 0.0
     request_timeout: float = Field(600, gt=0)
     think: bool | None = None  # None leaves the model's default
+    context_window: int | None = Field(None, ge=512)  # Ollama num_ctx; None uses the server default
 
 
 class TargetConfig(_Section):

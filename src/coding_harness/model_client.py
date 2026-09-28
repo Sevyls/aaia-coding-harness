@@ -59,7 +59,7 @@ class OllamaClient:
                 messages=messages,
                 tools=tools,
                 think=self._config.think,
-                options={"temperature": self._config.temperature},
+                options=self._options(),
             )
         except Exception as exc:  # connection refused, model not pulled, timeout, ...
             raise ModelError(f"{type(exc).__name__}: {exc}") from exc
@@ -75,7 +75,18 @@ class OllamaClient:
             # sometimes a whole plan at once. Only the first call is taken: the later ones
             # were written before the model saw any result.
             calls = parse_text_tool_calls(content)[:1]
-        return ModelResponse(content=content, tool_calls=calls)
+        return ModelResponse(
+            content=content,
+            tool_calls=calls,
+            prompt_tokens=getattr(response, "prompt_eval_count", None),
+            completion_tokens=getattr(response, "eval_count", None),
+        )
+
+    def _options(self) -> dict[str, Any]:
+        options: dict[str, Any] = {"temperature": self._config.temperature}
+        if self._config.context_window is not None:
+            options["num_ctx"] = self._config.context_window
+        return options
 
 
 def parse_text_tool_calls(content: str) -> list[ToolCall]:
