@@ -40,7 +40,7 @@ class LimitsConfig(_Section):
     max_steps: int = Field(30, ge=1)  # model requests
     max_actions: int = Field(40, ge=1)  # tool requests, executed or denied
     max_denied: int = Field(5, ge=1)
-    max_repeated_actions: int = Field(4, ge=0)  # identical consecutive requests; 0 disables
+    max_repeated_actions: int = Field(4, ge=0)  # same request with the repo unchanged, or same write; whole run; 0 disables
     max_model_retries: int = Field(2, ge=0)
     tool_output_chars: int = Field(8000, ge=200)
     max_write_chars: int = Field(100_000, ge=1)

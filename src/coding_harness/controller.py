@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -52,6 +53,7 @@ class AgentController:
         self._stats = RunStats()
         self._events: list[Event] = []
         self._step = 0
+        self._seen: Counter[tuple[str, str, object]] = Counter()  # whole run, review rounds too
         messages: list[Message] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": task_message},
@@ -82,7 +84,6 @@ class AgentController:
 
     def _loop(self, messages: list[Message], first_step: int = 1) -> tuple[StopReason, str]:
         limits, stats = self.limits, self._stats
-        last_signature, repeats = None, 0
         tools = self.registry.specs()
 
         for self._step in range(first_step, limits.max_steps + 1):
@@ -107,15 +108,25 @@ class AgentController:
                     return StopReason.ACTION_LIMIT, f"stopped after {stats.actions} actions"
                 stats.actions += 1
 
-                signature = (call.name, json.dumps(call.arguments, sort_keys=True, default=str))
-                repeats = repeats + 1 if signature == last_signature else 1
-                last_signature = signature
+                # A loop is the same request while the repository is unchanged, anywhere in the
+                # run: consecutive repeats, but also cycles such as read -> failing edit -> read.
+                # Its result cannot differ, so repeating it gives the model nothing new.
+                # An identical write counts in any state: applying the same edit again only
+                # works if the last one recreated old_text, which grows the file in a loop.
+                state = None if self.registry.writes(call.name) else self.registry.state()
+                signature = (call.name, json.dumps(call.arguments, sort_keys=True, default=str), state)
+                self._seen[signature] += 1
+                repeats = self._seen[signature]
                 if limits.max_repeated_actions and repeats > limits.max_repeated_actions:
                     self._emit("limit", limit="max_repeated_actions", value=limits.max_repeated_actions)
-                    return StopReason.REPEAT_LIMIT, f"the same {call.name!r} request repeated {repeats} times"
+                    where = "during the run" if state is None else "without any change to the repository in between"
+                    return StopReason.REPEAT_LIMIT, f"the same {call.name!r} request was made {repeats} times {where}"
 
                 result = self._execute(call)
-                messages.append({"role": "tool", "tool_name": call.name, "content": _tool_text(result)})
+                text = _tool_text(result)
+                if repeats > 1:
+                    text += _repeat_note(repeats, limits.max_repeated_actions, write=state is None)
+                messages.append({"role": "tool", "tool_name": call.name, "content": text})
 
                 if call.name == FINISH and result.status is ToolStatus.OK:
                     return StopReason.COMPLETED, call.arguments.get("summary", "")
@@ -184,6 +195,17 @@ def _assistant_message(response: ModelResponse) -> Message:
             for c in response.tool_calls
         ]
     return message
+
+
+def _repeat_note(repeats: int, limit: int, *, write: bool) -> str:
+    stop = f" The run stops if it is made more than {limit} times." if limit else ""
+    if write:
+        why = ("Applying the same edit again does not move the task forward; if it succeeded, "
+               "the file now contains the change more than once. Read the file and check it.")  # fmt: skip
+    else:
+        why = ("The repository has not changed since the first time, so the result is the same. "
+               "Repeating it will not help: change the request or try a different approach.")  # fmt: skip
+    return f"\nnote: you have now made exactly this request {repeats} times. {why}{stop}"
 
 
 def _tool_text(result: ToolResult) -> str:

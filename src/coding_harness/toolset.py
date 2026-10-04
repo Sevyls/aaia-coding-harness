@@ -60,6 +60,7 @@ class Tool:
     description: str
     args_model: type[BaseModel]
     handler: Callable[[Any], str]
+    writes: bool = False  # changes the repository; used by loop detection
 
     def spec(self) -> dict[str, Any]:
         schema = self.args_model.model_json_schema()
@@ -71,12 +72,17 @@ class Tool:
 
 
 class ToolRegistry:
-    def __init__(self, tools: Iterable[Tool]) -> None:
+    def __init__(self, tools: Iterable[Tool], state: Callable[[], object] = lambda: None) -> None:
         self._tools = {tool.name: tool for tool in tools}
+        self.state = state  # changes whenever the repository changes; used to detect loops
 
     @property
     def names(self) -> list[str]:
         return list(self._tools)
+
+    def writes(self, name: str) -> bool:
+        tool = self._tools.get(name)
+        return tool is not None and tool.writes
 
     def specs(self) -> list[dict[str, Any]]:
         return [tool.spec() for tool in self._tools.values()]
@@ -136,12 +142,14 @@ def build_toolset(
             "Replace one exact, unique occurrence of old_text with new_text in a file.",
             EditFileArgs,
             lambda a: repo.edit_file(a.path, a.old_text, a.new_text),
+            writes=True,
         ),
         Tool(
             "write_file",
             "Create a file or replace its whole content.",
             WriteFileArgs,
             lambda a: repo.write_file(a.path, a.content),
+            writes=True,
         ),
     ]
     names = check_names(checks, lint)
@@ -176,4 +184,4 @@ def build_toolset(
             lambda a: "completion proposed; the harness will now run the final checks",
         )
     )
-    return ToolRegistry(tools)
+    return ToolRegistry(tools, state=repo.state)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import os
 import re
 import warnings
@@ -42,6 +43,9 @@ class RepositoryTools:
         # Each written file's content at the start of the run (None: it did not exist), so lint
         # feedback compares with the start, not just with the previous edit.
         self._originals: dict[Path, str | None] = {}
+        # Content hash of every file written so far. The same request in the same repository
+        # state gets the same result; the controller uses state() to spot loops.
+        self._written: dict[str, str] = {}
 
     def resolve(self, path: str) -> Path:
         """Map a model-supplied path to a real path inside the repository, or refuse.
@@ -166,6 +170,12 @@ class RepositoryTools:
             target, previous, content
         )
 
+    def state(self) -> str:
+        """Fingerprint of the repository content. Only the harness tools write to the copy, so
+        the hashes of the written files are enough. An edit that is undone again returns to an
+        earlier fingerprint, so edit/undo cycles are recognized as loops too."""
+        return hashlib.sha256(repr(sorted(self._written.items())).encode()).hexdigest()
+
     def lint(self) -> str:
         """Lint problems introduced so far in the Python files this run has written."""
         found, checked = [], 0
@@ -218,6 +228,10 @@ class RepositoryTools:
             self._check_syntax(target, content, previous)
             self._check_names(target, content, previous)
         self._originals.setdefault(target, previous)
+        if content == self._originals[target]:
+            self._written.pop(self.display(target), None)  # back to the start of the run
+        else:
+            self._written[self.display(target)] = hashlib.sha256(content.encode("utf-8")).hexdigest()
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("w", encoding="utf-8", newline="") as handle:
             handle.write(content)

@@ -91,7 +91,7 @@ flowchart LR
 | `cli.py` | Commands `run` and `baseline`. Shows progress, changed files, diff, check table and token usage. Rejects empty or one-word tasks. |
 | `harness.py` | Wires one run: workspace, tools, two sandboxes (agent without, verification with the acceptance check), controller. Writes `events.jsonl` and `trace.json`. |
 | `config.py` | Loads `harness.toml` and validates it with Pydantic; unknown keys and wrong types are errors. |
-| `controller.py` | Loop: ask the model → validate → execute → return the result. Enforces step, action, denial, repeat and retry limits. |
+| `controller.py` | Loop: ask the model → validate → execute → return the result. Enforces step, action, denial, repeat and retry limits; repeats are detected over the whole run. `continue_task` resumes the conversation for review findings. |
 | `toolset.py` | Tool descriptions and Pydantic argument schemas. Rejects unknown tools and invalid arguments before execution. |
 | `tools.py` | File tools confined to the repository copy (resolves symlinks, blocks `..`, absolute paths and `.git`). Edit guardrails: rejects syntax errors, new undefined names and edits that change nothing; repairs indentation when that is the only way to keep the file valid. |
 | `sandbox.py` / `process.py` | Runs configured commands in a container. Timeout, bounded output, and removal of the process group and container. |
@@ -110,7 +110,11 @@ flowchart LR
 flowchart TD
     A[Read task and scope] --> B[Ask model for action]
     B -->|model error after retries| F
-    B -->|no tool call, or finish| F[Run final checks in sandbox<br/>collect diff]
+    B -->|no tool call, or finish| R{Review enabled,<br/>diff non-empty?}
+    R -->|no| F[Run final checks in sandbox<br/>+ lint · collect diff]
+    R -->|yes| RV[Second model reviews<br/>task, scope, diff]
+    RV -->|approved, or no rounds left| F
+    RV -->|changes requested| B
     B -->|tool calls| L{Limits left?<br/>actions · repeats}
     L -->|no| F
     L -->|yes| V{validate_action:<br/>known tool? valid args?<br/>path inside repo?}
@@ -123,6 +127,21 @@ flowchart TD
 
 Every stop has a reason (`StopReason`): `completed`, `step_limit`, `action_limit`, `denied_limit`,
 `repeat_limit`, `model_error` or `interrupted` (Ctrl+C). The final checks run in every case.
+
+**Loop detection.** Repeats are counted over the whole run (review rounds included), not just
+consecutively:
+
+- A read-only request (read, search, list, check) is a repeat when it is identical and the
+  repository content is the same as before. The state is a fingerprint of the content of every
+  file written in the run; a file restored to its original content counts as unchanged. This
+  catches cycles such as read → failing edit → read and edit → undo, while re-reading a file
+  after a real edit is not a repeat.
+- A write request (`edit_file`, `write_file`) is a repeat when it is identical, in any state.
+  Applying the same edit again only works if the last one recreated `old_text`, which made a
+  7B run grow the file in a loop.
+
+From the second time on, the tool result says that repeating will not help. Above
+`max_repeated_actions` the run stops with `repeat_limit`.
 
 **Review (optional).** If `[review]` is enabled and the agent stopped with `completed` and a
 non-empty diff, a second model reviews the diff. If it requests changes, its findings go back to
@@ -139,7 +158,7 @@ so only the final checks decide VERIFIED.
 |---|---|
 | `[model]` | Provider, model name, host, temperature, optional `context_window` (Ollama `num_ctx`) |
 | `[target]` | Target repository, exact starting commit, and the `scope` shown to the model (what may change) |
-| `[limits]` | Steps, actions, denials, identical repeats, model retries, tool output size |
+| `[limits]` | Steps, actions, denials, repeats (`max_repeated_actions`: the same request with the repository unchanged, or the same write in any state, anywhere in the run; see [Loop detection](#agent-loop)), model retries, tool output size |
 | `[sandbox]` | Container engine and image, network, memory, CPUs, PIDs, timeout, output limit |
 | `[checks]` | Commands the agent may run by name with `run_check` |
 | `[verification]` | Acceptance checks (hidden from the agent) and regression checks run after every run; `lint = true` adds the lint check |
@@ -193,6 +212,7 @@ container is needed.
 | Stoppable command | `tests/test_process.py::test_timeout_kills_the_whole_process_group`, `tests/test_sandbox.py` |
 | Bug fix | `acceptance/test_invalid_quantity.py` (final verification, against the real target) |
 | Edit guardrail (extra) | `tests/test_file_tools.py::test_edit_that_breaks_python_syntax_is_rejected` and the three tests after it |
+| Loop detection across the run (extra) | `tests/test_limits.py`, from `test_identical_requests_are_stopped_as_a_loop` to `test_reading_again_after_an_edit_is_not_a_repeat`: cycles, edit/undo, a growing edit, and re-reads after real edits |
 | Lint check, new problems only (extra) | `tests/test_lint.py` |
 | Second-model review (extra) | `tests/test_review.py` |
 | Indentation repair, undefined names, no-op edits (extra) | `tests/test_file_tools.py`, from `test_edit_inserted_mid_line_gets_the_lines_indentation` to the end; each reproduces a qwen2.5-coder:7b failure |
@@ -248,6 +268,23 @@ So the lint check and the review stop a sloppy 7B fix from counting as VERIFIED.
 make the 7B model produce a clean one. Review costs time: with Ollama swapping between the 7B
 and 27B models, the reviewed run took about 12 minutes.
 
+**Context window and loop detection.** The 7B prompts had reached 4,075–4,094 tokens, right at
+Ollama's apparent 4,096-token default. Both models were rerun with `context_window = 16384`
+(lint on, review off), and the loop detection was then improved based on what the 7B runs did:
+
+| Setting | Verified | What happened |
+|---|---|---|
+| 7B, 16k context, old repeat limit (consecutive only) (`20261004-223933`, `-224019`, `-224108`) | 0 / 3 | Largest prompt up to 13,793 tokens, so the limit was lifted, but the model was no better. Two runs went off-task to `Batch.__repr__` and alternated `read_file` with the same failing edit until `step_limit` (30 steps, 229,000 prompt tokens). The consecutive-only repeat check missed the cycle. |
+| 27B, 16k context (`20261004-224159`, `-224455`, `-224715`) | 3 / 3 | Same fix and numbers as with the default context (largest prompt 2,826), but slower: 34% of the model ran on the CPU. |
+| 7B, 16k, loop detection over the whole run (`20261004-225348`, `-225523`, `-225613`) | 0 / 3 | Two runs stopped at `repeat_limit` after 15 steps (74,000 tokens). One still hit `step_limit`: its edit's `new_text` contained `old_text`, so the same edit matched again and the file grew every time. |
+| 7B, 16k, identical writes also count (`20261004-230746`, `-230829`, `-230910`) | 0 / 3 | All stopped at `repeat_limit` after 14 steps and about 63,000 tokens, instead of up to 229,000. |
+
+The context limit was not the cause of the 7B failures, and a larger window only makes failing
+runs more expensive; the default stays. Loop detection now stops 7B loops early with a clear
+reason. qwen2.5-coder:7b does not solve this task in any setting tried; with it, the runs show
+that the guardrails, lint, review and limits contain a weak model and report nothing false as
+VERIFIED.
+
 ```bash
 uv run coding-harness baseline                                  # acceptance check fails
 uv run coding-harness run --task-file tasks/invalid-quantity.md # agent fixes it; checks pass
@@ -263,6 +300,10 @@ uv run coding-harness run --task-file tasks/invalid-quantity.md # agent fixes it
   would also run offline (SQLite); two need Postgres or Mailhog.
 - **One task.** The evidence is one task with a few runs on two models, not a success rate over
   several tasks. Three runs per setting are too few to tell 2/3 from a lucky streak.
+- **Loop detection assumes only the harness writes.** The repository state is built from the
+  files the harness tools wrote. That holds here (the repository is mounted read-only in the
+  sandbox), but a check that wrote files would not be seen. Retrying an identical edit after
+  other changes also counts as a repeat; more than `max_repeated_actions` such retries stop the run.
 - **Guardrails use the harness's Python.** `ast.parse` and pyflakes check with Python 3.13
   grammar and builtins, while the target runs on Python 3.9. Syntax or builtins that are new in
   3.10+ pass the guardrails and are caught by the tests instead.

@@ -24,7 +24,7 @@ src/allocation/domain/model.py. Do not modify or delete existing tests.
 max_steps = 30              # model requests
 max_actions = 40            # tool requests, executed or denied
 max_denied = 5
-max_repeated_actions = 4    # identical consecutive requests; 0 disables
+max_repeated_actions = 4    # same request, repository unchanged (or same write); whole run; 0 disables
 max_model_retries = 2
 tool_output_chars = 8000    # longer tool results are shortened and marked
 
