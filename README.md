@@ -27,9 +27,11 @@ cp harness.example.toml harness.toml      # no secrets needed
 ## Usage
 
 ```bash
-uv run coding-harness baseline                    # final checks on the untouched starting commit
-uv run coding-harness run --task "Fix ..."        # or --task-file tasks/<name>.md; --model to override
-uv run pytest                                     # harness tests: no model, no container needed
+uv run coding-harness baseline                                  # final checks on the untouched starting commit
+uv run coding-harness run --task-file tasks/invalid-quantity.md # the Stage 1 task
+uv run coding-harness run --task "Reject ..." --model <name>    # any task in words, another model
+uv run coding-harness --help                                    # all options, examples, exit codes
+uv run pytest                                                   # harness tests: no model, no container needed
 ```
 
 `run` prints each model step and tool request, then the changed files, the diff, a table of
@@ -177,6 +179,28 @@ Runs with qwen3.8:27b (traces are kept locally under `.harness/runs/`):
 
 Runs with the smaller qwen2.5-coder:7b, and the harness changes they led to, are in
 [docs/experiments.md](docs/experiments.md).
+
+### Reproduce the results
+
+After [Setup](#setup), with Ollama and the Podman machine running:
+
+```bash
+uv run pytest                                                   # 1. 115 passed; no model or container needed
+uv run coding-harness baseline                                  # 2. the bug is reproduced
+uv run coding-harness run --task-file tasks/invalid-quantity.md # 3. the agent fixes it
+```
+
+| Step | Expected result |
+|---|---|
+| 1. `pytest` | `115 passed` |
+| 2. `baseline` | `acceptance` **failed** (2 failed, 1 passed), `unit_tests` and `lint` passed, `NOT VERIFIED` |
+| 3. `run` | Steps such as `read_file` and `edit_file` on `handlers.py`, then a diff that adds `class InvalidQuantity(Exception)` and `if cmd.qty <= 0: raise InvalidQuantity(...)` in `allocate`. `acceptance`, `unit_tests` and `lint` passed, `VERIFIED`, exit code 0 |
+
+qwen3.8:27b needs about 17 GB of RAM or VRAM; with it, step 3 took 1–3 minutes on the test
+machine (a cold model load adds time). The model runs at temperature 0, but the exact steps and
+wording of the diff can still vary between runs and machines; the checks are what should match.
+The run IDs above refer to traces on the author's machine and are not in the repository; each
+of your runs writes its own trace under `.harness/runs/<id>/`, and its path is printed at the end.
 
 ## Known limitations
 

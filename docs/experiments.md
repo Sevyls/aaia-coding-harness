@@ -3,7 +3,19 @@
 The Stage 1 evidence uses qwen3.8:27b (see the README). These runs use the smaller
 qwen2.5-coder:7b (`--model qwen2.5-coder:7b`, Windows) to see where the harness breaks and to
 improve it. Each change to the harness was measured with three runs before and after. Traces are
-kept locally under `.harness/runs/<id>/`.
+kept locally under `.harness/runs/<id>/` and are not in the repository.
+
+To reproduce with the current harness (`ollama pull qwen2.5-coder:7b` first):
+
+```bash
+uv run coding-harness run --task-file tasks/invalid-quantity.md --model qwen2.5-coder:7b
+uv run coding-harness run --task-file tasks/invalid-quantity.md --model qwen2.5-coder:7b --review-model qwen3.8:27b
+```
+
+For the context-window runs, set `context_window = 16384` under `[model]` in `harness.toml`.
+The "before" rows below describe earlier versions of the harness (see `git log`); the current
+version behaves like the last row of each table. Small models vary more between runs than
+qwen3.8:27b, so expect the same kinds of failure rather than the same steps.
 
 ## Edit guardrails
 
