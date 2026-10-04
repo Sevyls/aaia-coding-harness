@@ -126,3 +126,74 @@ def test_already_broken_python_file_may_still_be_edited(tools, repo):
     (repo / "broken.py").write_text("x = (\ny = 1\n")
     tools.edit_file("broken.py", "y = 1", "y = 2")
     assert "y = 2" in (repo / "broken.py").read_text()
+
+
+HANDLER = (
+    "class InvalidSku(Exception):\n    pass\n\n\n"
+    "def allocate(line, product):\n"
+    "    if product is None:\n"
+    "        raise InvalidSku(line)\n"
+    "    product.allocate(line)\n"
+)
+
+
+def test_edit_inserted_mid_line_gets_the_lines_indentation(tools, repo):
+    # qwen2.5-coder:7b: old_text matched after the indentation, new_text lines had none
+    (repo / "handlers.py").write_text(HANDLER)
+    message = tools.edit_file(
+        "handlers.py", "product.allocate(line)",
+        "if line <= 0:\n    raise InvalidSku(line)\nproduct.allocate(line)",
+    )  # fmt: skip
+    assert "indented the lines of new_text" in message
+    assert (repo / "handlers.py").read_text().endswith(
+        "    if line <= 0:\n        raise InvalidSku(line)\n    product.allocate(line)\n"
+    )
+
+
+def test_correctly_indented_edit_is_applied_exactly_as_sent(tools, repo):
+    (repo / "handlers.py").write_text(HANDLER)
+    message = tools.edit_file("handlers.py", "product.allocate(line)", "product.allocate(line)  # ok")
+    assert "indented" not in message
+    assert (repo / "handlers.py").read_text() == HANDLER.replace("allocate(line)\n", "allocate(line)  # ok\n")
+
+
+def test_old_text_with_wrong_indentation_still_matches_whole_lines(tools, repo):
+    (repo / "handlers.py").write_text(HANDLER)
+    message = tools.edit_file(
+        "handlers.py", "if product is None:\n    raise InvalidSku(line)\n",
+        "if product is None or line <= 0:\n    raise InvalidSku(line)\n",
+    )  # fmt: skip
+    assert "different indentation" in message
+    assert "    if product is None or line <= 0:\n        raise InvalidSku(line)\n    product" in (
+        (repo / "handlers.py").read_text()
+    )
+
+
+def test_edit_that_uses_an_undefined_name_is_rejected(tools, repo):
+    # qwen2.5-coder:7b: raised InvalidQuantity without ever defining it
+    (repo / "handlers.py").write_text(HANDLER)
+    with pytest.raises(ToolError, match=r"not defined in handlers.py: InvalidQuantity \(line 9\)"):
+        tools.edit_file(
+            "handlers.py", "    product.allocate(line)",
+            "    if line <= 0:\n        raise InvalidQuantity(line)\n    product.allocate(line)",
+        )  # fmt: skip
+    assert (repo / "handlers.py").read_text() == HANDLER
+
+
+def test_edit_that_changes_nothing_is_rejected(tools, repo):
+    # qwen2.5-coder:7b: sent old_text == new_text, then claimed the validation was added
+    with pytest.raises(ToolError, match="nothing would change"):
+        tools.edit_file("shop/pricing.py", "def total(prices):", "def total(prices):")
+
+
+def test_names_that_were_already_undefined_do_not_block_an_edit(tools, repo):
+    (repo / "old.py").write_text("def f():\n    return missing\n")
+    tools.edit_file("old.py", "return missing", "return missing + 1")
+    assert "missing + 1" in (repo / "old.py").read_text()
+
+
+def test_rejected_edit_shows_the_numbered_lines_it_would_produce(tools, repo):
+    (repo / "handlers.py").write_text(HANDLER)
+    with pytest.raises(ToolError) as excinfo:
+        tools.edit_file("handlers.py", "    raise InvalidSku(line)\n", "    raise InvalidSku(line\n")
+    assert "   7 |         raise InvalidSku(line" in str(excinfo.value)

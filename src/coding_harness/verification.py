@@ -6,10 +6,12 @@ visible and the run is not reported as verified.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+from coding_harness import lint
 from coding_harness.domain import CommandResult
 from coding_harness.sandbox import ExecutionEnvironment
 from coding_harness.workspace import Workspace
@@ -27,6 +29,7 @@ class CheckStatus(StrEnum):
 class CheckKind(StrEnum):
     ACCEPTANCE = "acceptance"  # proves the task is solved
     REGRESSION = "regression"  # proves existing behaviour still works
+    QUALITY = "quality"  # the change introduces no lint problems
 
 
 @dataclass(frozen=True)
@@ -68,8 +71,11 @@ class Verification:
         env: ExecutionEnvironment,
         acceptance: Mapping[str, list[str]],
         regression: Mapping[str, list[str]],
+        *,
+        lint: bool = False,
     ) -> None:
         self.env = env
+        self.lint = lint
         self.checks = [(name, list(cmd), CheckKind.ACCEPTANCE) for name, cmd in acceptance.items()]
         self.checks += [(name, list(cmd), CheckKind.REGRESSION) for name, cmd in regression.items()]
 
@@ -77,10 +83,29 @@ class Verification:
         """Run the acceptance checks, then the regression checks."""
         return [CheckResult(name, self.env.run(command), kind) for name, command, kind in self.checks]
 
+    def run_lint(self, workspace: Workspace) -> CheckResult:
+        """Lint the changed Python files; only problems the change introduced count.
+
+        Runs in the harness process: the code is only parsed, never imported or executed.
+        """
+        started = time.monotonic()
+        paths = [p for status, p in workspace.changed_files() if status != "D" and p.endswith(".py")]
+        found = []
+        for path in paths:
+            with (workspace.repo / path).open(encoding="utf-8", errors="replace", newline="") as handle:
+                after = handle.read()
+            found += [f"{path}:{p}" for p in lint.new_problems(workspace.original(path), after)]
+        output = "\n".join(found) if found else f"no new lint problems in {len(paths)} changed Python file(s)"
+        result = CommandResult(command=["lint", *paths], exit_code=1 if found else 0, output=output,
+                               duration=time.monotonic() - started)  # fmt: skip
+        return CheckResult("lint", result, CheckKind.QUALITY)
+
     def show_diff(self, workspace: Workspace) -> tuple[list[tuple[str, str]], str]:
         return workspace.changed_files(), workspace.diff()
 
     def run(self, workspace: Workspace) -> VerificationReport:
         checks = self.run_acceptance_checks()
+        if self.lint:
+            checks.append(self.run_lint(workspace))
         changed, diff = self.show_diff(workspace)
         return VerificationReport(checks=checks, changed_files=changed, diff=diff)

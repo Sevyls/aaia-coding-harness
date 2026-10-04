@@ -9,7 +9,9 @@ from datetime import datetime
 from pathlib import Path
 
 # The repository is untrusted: never run its hooks or an fsmonitor command.
-GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+       # Keep files byte-for-byte as committed, even where Git for Windows defaults to CRLF.
+       "-c", "core.autocrlf=false"]
 
 
 class WorkspaceError(Exception):
@@ -19,8 +21,9 @@ class WorkspaceError(Exception):
 def _git(args: list[str], cwd: Path | None = None) -> str:
     try:
         result = subprocess.run(
-            [*GIT, *args], cwd=cwd, capture_output=True, text=True, timeout=120, check=False
-        )
+            [*GIT, *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=120, check=False,
+        )  # fmt: skip
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise WorkspaceError(f"git {' '.join(args)} could not run: {exc}") from None
     if result.returncode != 0:
@@ -58,6 +61,13 @@ class Workspace:
     def diff(self) -> str:
         self._include_new_files()
         return _git(["diff", "--no-color", "--no-ext-diff", "--no-textconv"], cwd=self.repo)
+
+    def original(self, path: str) -> str | None:
+        """The file's content at the starting commit, or None if it did not exist there."""
+        try:
+            return _git(["show", f"{self.commit}:{path}"], cwd=self.repo)
+        except WorkspaceError:
+            return None
 
     def _include_new_files(self) -> None:
         # Intent-to-add makes untracked files show up in `git diff` without staging content.

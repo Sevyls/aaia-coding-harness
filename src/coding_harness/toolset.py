@@ -101,8 +101,16 @@ class ToolRegistry:
         return tool, args
 
 
+LINT_CHECK = "lint"
+
+
+def check_names(checks: Mapping[str, list[str]], lint: bool) -> list[str]:
+    """Names the agent may pass to run_check: configured commands, plus the built-in lint."""
+    return [*checks, LINT_CHECK] if lint and LINT_CHECK not in checks else list(checks)
+
+
 def build_toolset(
-    repo: RepositoryTools, env: ExecutionEnvironment, checks: Mapping[str, list[str]]
+    repo: RepositoryTools, env: ExecutionEnvironment, checks: Mapping[str, list[str]], *, lint: bool = False
 ) -> ToolRegistry:
     tools = [
         Tool(
@@ -136,24 +144,29 @@ def build_toolset(
             lambda a: repo.write_file(a.path, a.content),
         ),
     ]
-    if checks:
-        # Only configured commands can run; the schema lists the allowed names.
+    names = check_names(checks, lint)
+    if names:
+        # Only configured commands (and the built-in lint) can run; the schema lists the names.
         run_check_args = create_model(
             "RunCheckArgs",
             __base__=Args,
             name=(
-                Literal[tuple(checks)],
-                Field(description="Name of a configured check", json_schema_extra={"enum": list(checks)}),
+                Literal[tuple(names)],
+                Field(description="Name of a configured check", json_schema_extra={"enum": names}),
             ),
         )
+        available = [f"{name} = {' '.join(cmd)}" for name, cmd in checks.items()]
+        if LINT_CHECK in names and LINT_CHECK not in checks:
+            available.append(f"{LINT_CHECK} = static check of the Python files you changed (new pyflakes "
+                             "problems, code before imports)")  # fmt: skip
+
+        def run_check(a: BaseModel) -> str:
+            if a.name not in checks:  # the built-in lint: static, in the harness, never runs code
+                return repo.lint()
+            return env.run(list(checks[a.name])).describe()
+
         tools.append(
-            Tool(
-                "run_check",
-                "Run a configured check (tests, lint) in the sandbox. Available: "
-                + ", ".join(f"{name} = {' '.join(cmd)}" for name, cmd in checks.items()),
-                run_check_args,
-                lambda a: env.run(list(checks[a.name])).describe(),
-            )
+            Tool("run_check", "Run a check. Available: " + "; ".join(available), run_check_args, run_check)
         )
     tools.append(
         Tool(

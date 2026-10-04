@@ -39,7 +39,7 @@ def run_bounded(
                 stdin=subprocess.DEVNULL,
                 stdout=sink,
                 stderr=subprocess.STDOUT,
-                start_new_session=True,
+                **_NEW_GROUP,
             )
         except OSError as exc:
             return CommandResult(
@@ -72,7 +72,23 @@ def run_bounded(
     )
 
 
+if os.name == "nt":
+    _NEW_GROUP = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+else:
+    _NEW_GROUP = {"start_new_session": True}
+
+
 def _kill_group(proc: subprocess.Popen[bytes]) -> None:
+    if os.name == "nt":
+        # Windows has no process groups to signal: kill the process tree instead.
+        if proc.poll() is None:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        proc.wait()
+        return
     # start_new_session=True makes the child a group leader, so its pid is the group id.
     try:
         os.killpg(proc.pid, signal.SIGKILL)

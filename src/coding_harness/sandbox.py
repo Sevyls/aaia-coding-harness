@@ -58,7 +58,7 @@ class ContainerSandbox:
         ]  # fmt: skip
         for mount in self.mounts:
             mode = "ro" if mount.read_only else "rw"
-            argv += ["--volume", f"{mount.source}:{mount.target}:{mode}"]
+            argv += ["--volume", f"{mount.source.as_posix()}:{mount.target}:{mode}"]
         for key, value in sorted(c.env.items()):
             argv += ["--env", f"{key}={value}"]
         return [*argv, c.image, *command]

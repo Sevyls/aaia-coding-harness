@@ -56,8 +56,21 @@ class AgentController:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": task_message},
         ]
+        return self._run(messages, first_step=1)
+
+    def continue_task(self, outcome: AgentOutcome, message: str) -> AgentOutcome:
+        """Send one more user message (e.g. review findings) in the same conversation.
+
+        Stats, events and the step budget carry on from ``outcome``; nothing is reset.
+        """
+        self._stats, self._events = outcome.stats, outcome.events
+        messages = outcome.messages
+        messages.append({"role": "user", "content": message})
+        return self._run(messages, first_step=self._step + 1)
+
+    def _run(self, messages: list[Message], first_step: int) -> AgentOutcome:
         try:
-            reason, final = self._loop(messages)
+            reason, final = self._loop(messages, first_step)
         except KeyboardInterrupt:
             reason, final = StopReason.INTERRUPTED, "stopped by the user"
         self._emit("stop", reason=str(reason), message=final)
@@ -67,12 +80,12 @@ class AgentController:
         """Check that the tool exists and the arguments fit its schema. Raises ActionRejected."""
         return self.registry.validate(call)
 
-    def _loop(self, messages: list[Message]) -> tuple[StopReason, str]:
+    def _loop(self, messages: list[Message], first_step: int = 1) -> tuple[StopReason, str]:
         limits, stats = self.limits, self._stats
         last_signature, repeats = None, 0
         tools = self.registry.specs()
 
-        for self._step in range(1, limits.max_steps + 1):
+        for self._step in range(first_step, limits.max_steps + 1):
             response = self._ask_model(messages, tools)
             if response is None:
                 return StopReason.MODEL_ERROR, "the model could not be reached"

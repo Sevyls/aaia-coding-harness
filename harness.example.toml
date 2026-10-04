@@ -46,6 +46,7 @@ unit_tests = ["pytest", "-p", "no:cacheprovider", "tests/unit"]
 [verification]
 # Kept outside the agent's writable area; mounted read-only at /acceptance for final checks only.
 acceptance_dir = "acceptance"
+lint = true                 # final check: no new pyflakes problems or E402 in changed files
 
 [verification.acceptance]
 # tasks/invalid-quantity.md: must fail on the starting commit, pass after the fix
@@ -53,3 +54,14 @@ acceptance = ["pytest", "-p", "no:cacheprovider", "/acceptance"]
 
 [verification.regression]
 unit_tests = ["pytest", "-p", "no:cacheprovider", "tests/unit"]
+
+# Second-model review of the diff after the agent proposes completion. Advisory: findings go
+# back to the agent at most max_rounds times, but only the final checks decide VERIFIED.
+[review]
+enabled = false             # or: uv run coding-harness run --review-model qwen3.8:27b ...
+max_rounds = 1
+
+[review.model]
+name = "qwen3.8:27b"
+host = "http://localhost:11434"
+request_timeout = 600

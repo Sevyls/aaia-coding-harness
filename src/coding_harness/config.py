@@ -66,6 +66,13 @@ class VerificationConfig(_Section):
     acceptance_dir: Path | None = None  # mounted read-only at /acceptance, never visible to the agent
     acceptance: dict[str, Command] = Field(default_factory=dict)
     regression: dict[str, Command] = Field(default_factory=dict)
+    lint: bool = False  # final check: the change introduces no lint problems (static, in-process)
+
+
+class ReviewConfig(_Section):
+    enabled: bool = False
+    model: ModelConfig | None = None  # None reviews with the same model as [model]
+    max_rounds: int = Field(1, ge=0)  # how often review findings go back to the coding agent
 
 
 class HarnessConfig(_Section):
@@ -76,6 +83,7 @@ class HarnessConfig(_Section):
     sandbox: SandboxConfig
     checks: dict[str, Command] = Field(default_factory=dict)  # commands the agent may run by name
     verification: VerificationConfig = Field(default_factory=VerificationConfig)
+    review: ReviewConfig = Field(default_factory=ReviewConfig)
 
 
 def load_config(path: Path) -> HarnessConfig:

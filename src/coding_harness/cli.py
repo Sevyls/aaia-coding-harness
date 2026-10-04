@@ -33,6 +33,8 @@ def run(
     task_file: Annotated[Path | None, typer.Option(help="Read the task from a file")] = None,
     config: ConfigOption = Path("harness.toml"),
     model: Annotated[str | None, typer.Option(help="Override the model name")] = None,
+    review: Annotated[bool | None, typer.Option("--review/--no-review", help="Override [review] enabled")] = None,
+    review_model: Annotated[str | None, typer.Option(help="Reviewer model name (turns review on)")] = None,
 ) -> None:
     """Run the agent on a task in a fresh copy of the target repository."""
     if (task is None) == (task_file is None):
@@ -48,10 +50,17 @@ def run(
     settings = _load(config)
     if model:
         settings.model.name = model
+    if review_model:
+        settings.review.enabled = True
+        base = settings.review.model or settings.model
+        settings.review.model = base.model_copy(update={"name": review_model})
+    if review is not None:
+        settings.review.enabled = review
 
     console.rule("[bold]Task")
     console.print(escape(text.strip()))
-    console.print(f"[dim]model {settings.model.name} · target {settings.target.source.name}"
+    reviewer = (settings.review.model or settings.model).name if settings.review.enabled else "off"
+    console.print(f"[dim]model {settings.model.name} · reviewer {reviewer} · target {settings.target.source.name}"
                   f" @ {settings.target.commit}[/dim]")  # fmt: skip
     try:
         report = harness.run_task(settings, text, on_event=_print_event)
@@ -107,6 +116,14 @@ def _print_event(event: Event) -> None:
             console.print(f"[bold red]limit reached:[/bold red] {d['limit']} = {d['value']}")
         case "stop":
             console.print(f"[bold]agent stopped:[/bold] {d['reason']}")
+        case "review":
+            console.rule(f"[bold]Review, round {d['round']} (advisory)")
+        case "review_done":
+            style = {"approved": "green", "changes requested": "yellow"}.get(d["status"], "red")
+            console.print(f"[{style}]reviewer: {d['status']}[/{style}]"
+                          + (f" [dim]({escape(d['error'])})[/dim]" if d["error"] else ""))  # fmt: skip
+            for finding in d["findings"]:
+                console.print(f"  - {escape(finding)}")
         case "verification":
             console.rule("[bold]Final checks (independent of the model)")
 
@@ -149,6 +166,11 @@ def _show_report(report: harness.RunReport) -> None:
             body = check.result.error or _tail(check.result.output, 40)
             console.print(Panel(escape(body), title=f"{check.name}: {check.status}", border_style="red"))
 
+    if report.reviews:
+        last = report.reviews[-1]
+        console.print(f"review (advisory, not part of verification): {last.status} after "
+                      f"{len(report.reviews)} review(s)"
+                      + (f", {len(last.findings)} open finding(s)" if last.findings else ""))  # fmt: skip
     if report.verified:
         console.print("[bold green]VERIFIED[/bold green]: the acceptance check and all other final checks passed.")
     elif not verification.has_acceptance:

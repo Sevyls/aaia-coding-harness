@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.13"
 
 [[package]]
@@ -48,7 +48,9 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "ollama" },
+    { name = "pycodestyle" },
     { name = "pydantic" },
+    { name = "pyflakes" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -62,7 +64,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "ollama", specifier = ">=0.6.2" },
+    { name = "pycodestyle", specifier = ">=2.15.0" },
     { name = "pydantic", specifier = ">=2.13.5" },
+    { name = "pyflakes", specifier = ">=4.0.2" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "typer", specifier = ">=0.27.2" },
 ]
@@ -190,6 +194,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pycodestyle"
+version = "2.15.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/df/178e41c9ed0ff33c23b3f3757e4e658c889f9abc5ad76ece6cd607b12e9c/pycodestyle-2.15.0.tar.gz", hash = "sha256:318f5db083869b4c4dad922d0b11124fb27ab181b6730b93371da671e31bd50e", size = 39765, upload-time = "2026-09-22T22:15:34.926Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/56/e2/480bcdb153feecde4d736b18c908c7eee4846f11d7547d2e0c71499af630/pycodestyle-2.15.0-py2.py3-none-any.whl", hash = "sha256:12fd2f73c7b8ee8845a0431111df8faf4c1a07d6e64e2ee7f0c74014dab14181", size = 31583, upload-time = "2026-09-22T22:15:34.007Z" },
+]
+
+[[package]]
 name = "pydantic"
 version = "2.13.5"
 source = { registry = "https://pypi.org/simple" }
@@ -258,6 +271,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/5a/9f/5d685c2693b972d1a59c998586e8823712b66603aeff47ee60a4bdaafd37/pydantic_core-2.46.5-cp314-cp314t-win32.whl", hash = "sha256:97cf3eb53a8cccacf9d46686a0926186c9bfb5574f2ed66d3639d5fe117cd3a9", size = 1921180, upload-time = "2026-08-28T10:00:12.35Z" },
     { url = "https://files.pythonhosted.org/packages/70/12/5c94ee16d65a37a15f9e869f5e6256df111154491173801a4c5e800ab548/pydantic_core-2.46.5-cp314-cp314t-win_amd64.whl", hash = "sha256:d2f9fc07a8042a8f95925b35c4f04f469707c981fc33245b6ca187cf5d2dd290", size = 2020515, upload-time = "2026-08-28T10:00:14.774Z" },
     { url = "https://files.pythonhosted.org/packages/63/19/67830dda664e6bdf9285ee2e40f355d0d7d6b92aa0c42e8d217bb8d33d36/pydantic_core-2.46.5-cp314-cp314t-win_arm64.whl", hash = "sha256:acf8a67ba51f4ca9ddbd0e6b3000a65ac51ab734661778b3e7ba64d99a710f2f", size = 1989276, upload-time = "2026-08-28T10:00:16.984Z" },
+]
+
+[[package]]
+name = "pyflakes"
+version = "4.0.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/5e/17305a7708e22df56b332f2f4c202d0a830e9689634da2f727212d806de9/pyflakes-4.0.2.tar.gz", hash = "sha256:dcf9cfcece3d9dacc66b7dd2fa217c1a1b79e3075bf488909c15e0857203fd24", size = 67173, upload-time = "2026-10-03T21:14:01.663Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/a8/7df0a3b4f8166c2fb7fe0195f88a0a643cfb7cd1b0430c19f74bd01771f5/pyflakes-4.0.2-py2.py3-none-any.whl", hash = "sha256:01faee1160feadfd9d58c9631a895126ba2032c2e8748e32a96ab51cbd084c6d", size = 66216, upload-time = "2026-10-03T21:13:59.732Z" },
 ]
 
 [[package]]

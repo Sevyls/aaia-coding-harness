@@ -34,6 +34,18 @@ def test_diff_and_changed_files_include_new_files(git_repo, tmp_path):
     assert "+RATE = 20" in diff
 
 
+def test_clone_keeps_lf_line_endings_even_with_autocrlf(git_repo, tmp_path, monkeypatch):
+    # Git for Windows sets core.autocrlf=true; CRLF files would make every LF edit miss.
+    config = tmp_path / "gitconfig"
+    config.write_text("[core]\n\tautocrlf = true\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+
+    ws = Workspace.create(git_repo, "HEAD", tmp_path / "runs")
+
+    assert b"\r\n" not in (ws.repo / "shop" / "pricing.py").read_bytes()
+    assert ws.changed_files() == []
+
+
 def test_unknown_commit_is_a_clear_error(git_repo, tmp_path):
     with pytest.raises(WorkspaceError, match="checkout"):
         Workspace.create(git_repo, "0" * 40, tmp_path / "runs")

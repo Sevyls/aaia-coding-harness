@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from coding_harness.config import HarnessConfig
 from coding_harness.controller import AgentController, AgentOutcome
-from coding_harness.domain import Event
+from coding_harness.domain import Event, StopReason
 from coding_harness.model_client import ModelClient, create_model_client
 from coding_harness.prompts import build_task_message
+from coding_harness.review import Review, Reviewer, feedback_message
 from coding_harness.sandbox import ContainerSandbox, ExecutionEnvironment, Mount
-from coding_harness.toolset import build_toolset
+from coding_harness.toolset import build_toolset, check_names
 from coding_harness.tools import RepositoryTools
 from coding_harness.verification import Verification, VerificationReport
 from coding_harness.workspace import Workspace
@@ -28,6 +29,7 @@ class RunReport:
     outcome: AgentOutcome | None  # None for a baseline run without the agent
     verification: VerificationReport
     trace_path: Path
+    reviews: list[Review] = field(default_factory=list)  # advisory; never part of `verified`
 
     @property
     def verified(self) -> bool:
@@ -39,6 +41,7 @@ def run_task(
     task: str,
     *,
     model: ModelClient | None = None,
+    reviewer_model: ModelClient | None = None,
     env_factory: EnvFactory | None = None,
     on_event: Callable[[Event], None] | None = None,
 ) -> RunReport:
@@ -52,12 +55,17 @@ def run_task(
         max_search_matches=limits.max_search_matches,
     )
     # The agent's environment has no acceptance mount: it never sees the acceptance check.
-    registry = build_toolset(repo_tools, env_factory(workspace.repo, []), config.checks)
+    lint = config.verification.lint
+    registry = build_toolset(repo_tools, env_factory(workspace.repo, []), config.checks, lint=lint)
 
     with EventLog(workspace.run_dir / "events.jsonl", forward=on_event) as log:
         log(Event("run_started", 0, {"task": task, "commit": workspace.commit, "model": config.model.name}))
         controller = AgentController(model or create_model_client(config.model), registry, limits, log)
-        outcome = controller.run_task(build_task_message(task, config.target.scope, list(config.checks)))
+        outcome = controller.run_task(build_task_message(task, config.target.scope, check_names(config.checks, lint)))
+        reviews: list[Review] = []
+        if config.review.enabled:
+            reviewer = Reviewer(reviewer_model or create_model_client(config.review.model or config.model))
+            outcome = _review_loop(config, task, workspace, controller, outcome, reviewer, reviews, log)
         log(Event("verification", 0))
         verification = _verification(config, workspace, env_factory).run(workspace)
         log(Event("verification_done", 0, {
@@ -65,7 +73,36 @@ def run_task(
             "checks": {c.name: str(c.status) for c in verification.checks},
             "changed_files": verification.changed_files,
         }))  # fmt: skip
-    return _finish(RunReport(task, workspace, outcome, verification, workspace.run_dir / "trace.json"))
+    return _finish(RunReport(task, workspace, outcome, verification, workspace.run_dir / "trace.json", reviews))
+
+
+def _review_loop(
+    config: HarnessConfig,
+    task: str,
+    workspace: Workspace,
+    controller: AgentController,
+    outcome: AgentOutcome,
+    reviewer: Reviewer,
+    reviews: list[Review],
+    log: Callable[[Event], None],
+) -> AgentOutcome:
+    """Review each proposed completion; send findings back at most ``max_rounds`` times.
+
+    Only a completed run with a non-empty diff is reviewed. The last review is recorded
+    without another round, so the user sees what the reviewer thought of the final diff.
+    """
+    rounds = 0
+    while outcome.stop_reason is StopReason.COMPLETED and (diff := workspace.diff()):
+        log(Event("review", 0, {"round": len(reviews) + 1}))
+        review = reviewer.review(task, config.target.scope, diff)
+        reviews.append(review)
+        log(Event("review_done", 0, {"status": review.status, "findings": [str(f) for f in review.findings],
+                                     "error": review.error}))  # fmt: skip
+        if review.approve is not False or rounds >= config.review.max_rounds:
+            break
+        rounds += 1
+        outcome = controller.continue_task(outcome, feedback_message(review))
+    return outcome
 
 
 def run_baseline(config: HarnessConfig, *, env_factory: EnvFactory | None = None) -> RunReport:
@@ -108,7 +145,7 @@ def _verification(config: HarnessConfig, workspace: Workspace, env_factory: EnvF
     if config.verification.acceptance_dir is not None:
         mounts.append(Mount(config.verification.acceptance_dir, "/acceptance", read_only=True))
     v = config.verification
-    return Verification(env_factory(workspace.repo, mounts), v.acceptance, v.regression)
+    return Verification(env_factory(workspace.repo, mounts), v.acceptance, v.regression, lint=v.lint)
 
 
 def _finish(report: RunReport) -> RunReport:
@@ -125,6 +162,7 @@ def _finish(report: RunReport) -> RunReport:
             {"name": c.name, "kind": str(c.kind), "status": str(c.status), **asdict(c.result)}
             for c in report.verification.checks
         ],
+        "reviews": [asdict(r) | {"status": r.status} for r in report.reviews],
         "changed_files": report.verification.changed_files,
         "diff": report.verification.diff,
         "events": [asdict(e) for e in outcome.events] if outcome else [],

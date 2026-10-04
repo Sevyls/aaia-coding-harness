@@ -8,6 +8,11 @@ import re
 import warnings
 from pathlib import Path
 
+from pyflakes import checker as pyflakes_checker
+from pyflakes import messages as pyflakes_messages
+
+from coding_harness import lint
+
 SKIPPED_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache", ".pytest_cache"}
 MAX_SEARCH_FILE_BYTES = 1_000_000
 MAX_SHOWN_LINE_CHARS = 300
@@ -34,6 +39,9 @@ class RepositoryTools:
         self.max_write_chars = max_write_chars
         self.max_list_entries = max_list_entries
         self.max_search_matches = max_search_matches
+        # Each written file's content at the start of the run (None: it did not exist), so lint
+        # feedback compares with the start, not just with the previous edit.
+        self._originals: dict[Path, str | None] = {}
 
     def resolve(self, path: str) -> Path:
         """Map a model-supplied path to a real path inside the repository, or refuse.
@@ -103,23 +111,47 @@ class RepositoryTools:
         return "\n".join(matches) if matches else f"no matches for {pattern!r}"
 
     def edit_file(self, path: str, old_text: str, new_text: str) -> str:
+        """Replace ``old_text`` once. Small models often get indentation wrong, so as a fallback
+        ``old_text`` may match ignoring indentation, and ``new_text`` is re-indented when that is
+        the only way to keep the file valid Python. A correct edit is applied exactly as sent."""
         target = self.resolve(path)
         text = self._read_text(target, path)
         count = text.count(old_text)
-        if count == 0:
-            raise ToolError(
-                f"old_text was not found in {path!r}; read the file and copy the text exactly, "
-                "including indentation"
-            )
         if count > 1:
+            raise _not_unique(path, count)
+        note = ""
+        if count == 1:
+            start, end = text.index(old_text), text.index(old_text) + len(old_text)
+            content = text[:start] + new_text + text[end:]
+            # old_text began after the line's indentation, so the later lines of new_text
+            # need that indentation too; the model often leaves it out.
+            indent = text[text.rfind("\n", 0, start) + 1 : start]
+            if indent and not indent.strip() and _syntax_error(content) is not None:
+                fixed = text[:start] + _reindent(new_text, "", indent, skip_first=True) + text[end:]
+                if _syntax_error(fixed) is None:
+                    content, note = fixed, " (indented the lines of new_text to match the file)"
+        else:
+            start, end, matches, model_indent, file_indent = _match_ignoring_indentation(text, old_text)
+            if matches == 0:
+                raise ToolError(
+                    f"old_text was not found in {path!r}; read the file and copy the text exactly, "
+                    "including indentation"
+                )
+            if matches > 1:
+                raise _not_unique(path, matches)
+            if old_text.endswith("\n") and new_text.endswith("\n"):
+                new_text = new_text[:-1]  # the matched block excludes its last line ending
+            content = text[:start] + _reindent(new_text, model_indent, file_indent) + text[end:]
+            note = " (old_text matched with different indentation; re-indented new_text to match)"
+        if content == text:
             raise ToolError(
-                f"old_text occurs {count} times in {path!r}; include more surrounding lines "
-                "so it is unique"
+                f"nothing would change in {path!r}: new_text is the same as old_text; "
+                "put the changed code in new_text"
             )
-        self._write_text(target, text.replace(old_text, new_text, 1), previous=text)
+        self._write_text(target, content, previous=text)
         return (
             f"edited {self.display(target)}: replaced {old_text.count(chr(10)) + 1} line(s) "
-            f"with {new_text.count(chr(10)) + 1} line(s)"
+            f"with {new_text.count(chr(10)) + 1} line(s){note}" + self._lint_note(target, text, content)
         )
 
     def write_file(self, path: str, content: str) -> str:
@@ -130,7 +162,36 @@ class RepositoryTools:
         previous = self._read_text(target, path) if existed else None
         self._write_text(target, content, previous=previous)
         action = "overwrote" if existed else "created"
-        return f"{action} {self.display(target)} ({len(content)} characters)"
+        return f"{action} {self.display(target)} ({len(content)} characters)" + self._lint_note(
+            target, previous, content
+        )
+
+    def lint(self) -> str:
+        """Lint problems introduced so far in the Python files this run has written."""
+        found, checked = [], 0
+        for target, original in self._originals.items():
+            if target.suffix != ".py" or not target.is_file():
+                continue
+            checked += 1
+            current = self._read_text(target, self.display(target))
+            found += [f"{self.display(target)}:{p}" for p in lint.new_problems(original, current)]
+        if not found:
+            return f"lint: no new problems in {checked} changed Python file(s)"
+        return "lint: problems introduced by this run (fix them before finish):\n" + "\n".join(found)
+
+    def _lint_note(self, target: Path, previous: str | None, content: str) -> str:
+        """Lint feedback after a write. The write is kept; the final lint check would fail."""
+        if target.suffix != ".py":
+            return ""
+        original = self._originals.get(target, previous)
+        now = lint.new_problems(original, content)
+        if not now:
+            had = previous is not None and lint.new_problems(original, previous)
+            return "\nlint: the problems this run introduced in the file are fixed" if had else ""
+        listed = "\n".join(f"  {problem}" for problem in now[:10])
+        more = f"\n  ... and {len(now) - 10} more" if len(now) > 10 else ""
+        return (f"\nwarning: compared with the start of the run, the file has {len(now)} new lint "
+                f"problem(s); the final lint check fails until they are fixed:\n{listed}{more}")  # fmt: skip
 
     def _walk(self, start: Path):
         for dirpath, dirnames, filenames in os.walk(start):
@@ -155,6 +216,8 @@ class RepositoryTools:
             )
         if target.suffix == ".py":
             self._check_syntax(target, content, previous)
+            self._check_names(target, content, previous)
+        self._originals.setdefault(target, previous)
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("w", encoding="utf-8", newline="") as handle:
             handle.write(content)
@@ -167,13 +230,99 @@ class RepositoryTools:
         error = _syntax_error(content)
         if error is None or (previous is not None and _syntax_error(previous) is not None):
             return
-        lines = content.splitlines()
-        line = lines[error.lineno - 1].strip() if error.lineno and error.lineno <= len(lines) else ""
         raise ToolError(
             f"rejected: the change would introduce a syntax error in {self.display(target)} "
-            f"(line {error.lineno}: {error.msg}: {line!r}); the file was not changed. "
-            "Check indentation and brackets, then try again."
+            f"(line {error.lineno}: {error.msg}); the file was not changed. "
+            "Check indentation and brackets, then try again. The changed file would look like this:\n"
+            + _numbered(content, error.lineno or 1)
         )
+
+    def _check_names(self, target: Path, content: str, previous: str | None) -> None:
+        """Reject a change that uses names defined nowhere (SWE-agent runs flake8 F821 for this).
+
+        Uses pyflakes, which only analyses the code. Names that were already undefined before
+        the change are not counted, so the check never blocks unrelated edits.
+        """
+        if previous is not None and _syntax_error(previous) is not None:
+            return
+        before = _undefined_names(previous) if previous is not None else {}
+        added = {name: line for name, line in _undefined_names(content).items() if name not in before}
+        if not added:
+            return
+        names = ", ".join(f"{name} (line {line})" for name, line in added.items())
+        raise ToolError(
+            f"rejected: the change uses names that are not defined in {self.display(target)}: "
+            f"{names}; the file was not changed. Define or import them first, then use them. "
+            "The changed file would look like this:\n" + _numbered(content, min(added.values()))
+        )
+
+
+def _not_unique(path: str, count: int) -> ToolError:
+    return ToolError(
+        f"old_text occurs {count} times in {path!r}; include more surrounding lines so it is unique"
+    )
+
+
+def _match_ignoring_indentation(text: str, old_text: str) -> tuple[int, int, int, str, str]:
+    """Find whole lines equal to ``old_text`` up to leading and trailing whitespace.
+
+    Returns the span of the last match without its final line ending, the number of matches,
+    and the indentation of the first non-blank line in ``old_text`` and in the file.
+    """
+    wanted = [line.strip() for line in old_text.splitlines()]
+    if not any(wanted):
+        return 0, 0, 0, "", ""
+    lines = text.splitlines(keepends=True)
+    stripped = [line.strip() for line in lines]
+    first = next(i for i, line in enumerate(wanted) if line)
+    model_indent = _leading(old_text.splitlines()[first])
+    span, count, file_indent = (0, 0), 0, ""
+    for i in range(len(lines) - len(wanted) + 1):
+        if stripped[i : i + len(wanted)] == wanted:
+            start = sum(len(line) for line in lines[:i])
+            last = lines[i + len(wanted) - 1]
+            end = start + sum(len(line) for line in lines[i : i + len(wanted)])
+            end -= len(last) - len(last.rstrip("\r\n"))
+            span, count, file_indent = (start, end), count + 1, _leading(lines[i + first])
+    return span[0], span[1], count, model_indent, file_indent
+
+
+def _reindent(text: str, old: str, new: str, *, skip_first: bool = False) -> str:
+    """Replace the indentation ``old`` with ``new`` on every non-blank line that starts with it."""
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if (skip_first and i == 0) or not line.strip() or not line.startswith(old):
+            continue
+        lines[i] = new + line[len(old) :]
+    return "".join(lines)
+
+
+def _leading(line: str) -> str:
+    return line[: len(line) - len(line.lstrip())]
+
+
+def _numbered(content: str, center: int, radius: int = 3) -> str:
+    """Lines around ``center`` with line numbers, so the model sees what it actually wrote."""
+    lines = content.splitlines()
+    first, last = max(center - radius, 1), min(center + radius, len(lines))
+    return "\n".join(
+        f"{number:>4} | {lines[number - 1][:MAX_SHOWN_LINE_CHARS]}" for number in range(first, last + 1)
+    )
+
+
+def _undefined_names(source: str) -> dict[str, int]:
+    """Undefined names and the first line using each, as found by pyflakes."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            tree = ast.parse(source)
+        except (SyntaxError, ValueError):
+            return {}
+    found: dict[str, int] = {}
+    for message in pyflakes_checker.Checker(tree).messages:
+        if isinstance(message, pyflakes_messages.UndefinedName):
+            found.setdefault(message.message_args[0], message.lineno)
+    return found
 
 
 def _syntax_error(source: str) -> SyntaxError | None:
