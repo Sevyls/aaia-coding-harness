@@ -19,24 +19,45 @@ from coding_harness.domain import Event, StopReason
 from coding_harness.verification import CheckStatus
 from coding_harness.workspace import WorkspaceError
 
-app = typer.Typer(help="A small coding harness: a task goes in, a reviewable diff comes out.",
-                  no_args_is_help=True, add_completion=False)  # fmt: skip
+app = typer.Typer(
+    help="A small coding harness: a task goes in, a reviewable diff comes out.\n\n"
+         "Settings come from harness.toml (copy harness.example.toml). "
+         "Start with [bold]baseline[/bold], then [bold]run[/bold].",
+    epilog="Docs: README.md · docs/guardrails.md · docs/windows.md",
+    no_args_is_help=True, add_completion=False,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)  # fmt: skip
 console = Console()
 
 ConfigOption = Annotated[Path, typer.Option("--config", "-c", help="Harness settings (TOML)")]
 STATUS_STYLE = {CheckStatus.PASSED: "green", CheckStatus.FAILED: "red", CheckStatus.UNAVAILABLE: "yellow"}
 
 
-@app.command()
+RUN_EPILOG = (
+    "[bold]Examples[/bold]\n\n"
+    "  coding-harness run --task-file tasks/invalid-quantity.md\n\n"
+    "  coding-harness run -t \"Reject qty <= 0\" --model qwen2.5-coder:7b\n\n"
+    "  coding-harness run -t \"Reject qty <= 0\" --review-model qwen3.8:27b\n\n"
+    "[bold]Exit codes[/bold]: 0 verified (acceptance check configured and every final check passed), "
+    "1 not verified, 2 usage or setup error. Each run is kept under .harness/runs/<id>/."
+)
+
+
+@app.command(epilog=RUN_EPILOG)
 def run(
-    task: Annotated[str | None, typer.Option("--task", "-t", help="The coding task")] = None,
-    task_file: Annotated[Path | None, typer.Option(help="Read the task from a file")] = None,
+    task: Annotated[str | None, typer.Option("--task", "-t", help="The coding task, in words")] = None,
+    task_file: Annotated[Path | None, typer.Option(help="Read the task from a file, e.g. tasks/*.md")] = None,
     config: ConfigOption = Path("harness.toml"),
-    model: Annotated[str | None, typer.Option(help="Override the model name")] = None,
-    review: Annotated[bool | None, typer.Option("--review/--no-review", help="Override [review] enabled")] = None,
+    model: Annotated[str | None, typer.Option(help="Override the model name from \\[model]")] = None,
+    review: Annotated[bool | None, typer.Option("--review/--no-review",
+                                                help="Turn the second-model review on or off")] = None,
     review_model: Annotated[str | None, typer.Option(help="Reviewer model name (turns review on)")] = None,
 ) -> None:
-    """Run the agent on a task in a fresh copy of the target repository."""
+    # The help paragraph stays on one line: Typer shows line breaks in docstrings as they are.
+    """Run the agent on a task in a fresh copy of the target repository.
+
+    Give exactly one of --task or --task-file. Shows each step, then the changed files, the diff and the final checks, which run whatever the model claims.
+    """
     if (task is None) == (task_file is None):
         raise typer.BadParameter("give exactly one of --task or --task-file")
     if task is not None and len(task.split()) == 1:
@@ -70,9 +91,12 @@ def run(
     raise typer.Exit(0 if report.verified else 1)
 
 
-@app.command()
+@app.command(epilog="[bold]Example[/bold]: coding-harness baseline -c harness.toml")
 def baseline(config: ConfigOption = Path("harness.toml")) -> None:
-    """Run the final checks on the untouched starting commit (the acceptance check should fail)."""
+    """Run the final checks on the untouched starting commit (the acceptance check should fail).
+
+    Shows that the acceptance check reproduces the bug before any change is made.
+    """
     settings = _load(config)
     try:
         report = harness.run_baseline(settings)
