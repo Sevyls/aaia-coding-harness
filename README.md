@@ -105,7 +105,7 @@ by default. Both are described in [docs/guardrails.md](docs/guardrails.md).
 | Section | Purpose |
 |---|---|
 | `[model]` | Provider, model name, host, temperature, optional `context_window` |
-| `[target]` | Target repository, exact starting commit, and the `scope` shown to the model |
+| `[target]` | Target repository, exact starting commit, the `scope` shown to the model, and `allowed_paths` (globs) that the file tools and a final check enforce |
 | `[limits]` | Steps, actions, denials, repeats, model retries, tool output size |
 | `[sandbox]` | Container engine and image, network, memory, CPUs, PIDs, timeout, output limit |
 | `[checks]` | Commands the agent may run by name with `run_check` |
@@ -124,6 +124,9 @@ The task itself is not configuration: it comes from `--task` or `--task-file`.
   shell command. Each check runs in a new container with no network, all capabilities dropped,
   `no-new-privileges`, memory, CPU and PID limits, a read-only root filesystem, and the
   repository copy mounted read-only. No home directory or credentials are mounted.
+- **Enforced scope.** `allowed_paths` limits writes to the listed files. The file tools deny any
+  other write (reads stay open), and a final `scope` check fails if any other file changed, so
+  existing tests cannot be weakened. The scope text in the task is only advice; this is the boundary.
 - **Edit guardrails.** An edit that introduces a Python syntax error or an undefined name is
   rejected before anything is written. The code is only parsed, never run.
 - **Stoppable.** Commands run in their own process group. On timeout or Ctrl+C the group is
@@ -140,7 +143,7 @@ container is needed.
 
 | Handout requirement | Tests |
 |---|---|
-| File tools | `tests/test_file_tools.py` |
+| File tools (incl. allowed scope) | `tests/test_file_tools.py` |
 | Controller | `tests/test_controller.py` |
 | Invalid request | `tests/test_invalid_requests.py` |
 | Failed command | `tests/test_process.py`, `tests/test_verification.py` |
@@ -162,8 +165,8 @@ surviving a crash: `tests/test_verification.py::test_events_are_logged_as_they_h
   `model.Product` / `model.Batch`.
 - **Task:** [`tasks/invalid-quantity.md`](tasks/invalid-quantity.md). The task names the
   exception `handlers.InvalidQuantity`, because the acceptance check depends on that interface.
-- **Allowed scope:** `service_layer/handlers.py` and, if needed, `domain/model.py`. Existing tests
-  must not change.
+- **Allowed scope:** `service_layer/handlers.py` and, if needed, `domain/model.py`, enforced by
+  `allowed_paths` (file tools and final `scope` check). Existing tests must not change.
 - **Acceptance check:** [`acceptance/test_invalid_quantity.py`](acceptance/test_invalid_quantity.py).
   On the starting commit, `baseline` reports 2 failed and 1 passed. A reference fix (checked in a
   throwaway copy, not in the repository) gives 3 passed, and the 20 existing unit tests still pass.
@@ -185,16 +188,16 @@ Runs with the smaller qwen2.5-coder:7b, and the harness changes they led to, are
 After [Setup](#setup), with Ollama and the Podman machine running:
 
 ```bash
-uv run pytest                                                   # 1. 115 passed; no model or container needed
+uv run pytest                                                   # 1. 124 passed; no model or container needed
 uv run coding-harness baseline                                  # 2. the bug is reproduced
 uv run coding-harness run --task-file tasks/invalid-quantity.md # 3. the agent fixes it
 ```
 
 | Step | Expected result |
 |---|---|
-| 1. `pytest` | `115 passed` |
-| 2. `baseline` | `acceptance` **failed** (2 failed, 1 passed), `unit_tests` and `lint` passed, `NOT VERIFIED` |
-| 3. `run` | Steps such as `read_file` and `edit_file` on `handlers.py`, then a diff that adds `class InvalidQuantity(Exception)` and `if cmd.qty <= 0: raise InvalidQuantity(...)` in `allocate`. `acceptance`, `unit_tests` and `lint` passed, `VERIFIED`, exit code 0 |
+| 1. `pytest` | `124 passed` |
+| 2. `baseline` | `acceptance` **failed** (2 failed, 1 passed), `unit_tests`, `lint` and `scope` passed, `NOT VERIFIED` |
+| 3. `run` | Steps such as `read_file` and `edit_file` on `handlers.py`, then a diff that adds `class InvalidQuantity(Exception)` and `if cmd.qty <= 0: raise InvalidQuantity(...)` in `allocate`. `acceptance`, `unit_tests`, `lint` and `scope` passed, `VERIFIED`, exit code 0 |
 
 qwen3.8:27b needs about 17 GB of RAM or VRAM; with it, step 3 took 1–3 minutes on the test
 machine (a cold model load adds time). The model runs at temperature 0, but the exact steps and

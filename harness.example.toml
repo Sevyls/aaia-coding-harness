@@ -19,6 +19,12 @@ scope = """
 Change only src/allocation/service_layer/handlers.py and, if needed,
 src/allocation/domain/model.py. Do not modify or delete existing tests.
 """
+# Enforced: the file tools refuse writes elsewhere, and a final check fails if any other
+# file changed. Glob patterns relative to the repository; empty list: no restriction.
+allowed_paths = [
+    "src/allocation/service_layer/handlers.py",
+    "src/allocation/domain/model.py",
+]
 
 [limits]
 max_steps = 30              # model requests

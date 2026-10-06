@@ -122,3 +122,34 @@ def test_events_are_logged_as_they_happen_and_survive_a_crash(git_repo, tmp_path
     lines = (run_dir / "events.jsonl").read_text().splitlines()
     kinds = [json.loads(line)["kind"] for line in lines]
     assert kinds[0] == "run_started" and "tool_result" in kinds and kinds[-1] == "verification"
+
+
+# --- scope check ---
+
+
+def test_scope_check_fails_for_a_file_outside_the_allowed_paths(git_repo, tmp_path):
+    from coding_harness.verification import Verification
+    from coding_harness.workspace import Workspace
+
+    workspace = Workspace.create(git_repo, "HEAD", tmp_path / "runs")
+    (workspace.repo / "shop" / "pricing.py").write_text("def total(p):\n    return sum(p)\n")
+    verification = Verification(FakeEnvironment(), {}, {}, allowed_paths=["shop/pricing.py"])
+    assert verification.run_scope_check(workspace).status is CheckStatus.PASSED
+
+    (workspace.repo / "shop" / "cart.py").write_text("# weakened\n")
+    result = verification.run_scope_check(workspace)
+    assert result.status is CheckStatus.FAILED
+    assert "shop/cart.py" in result.result.output
+    assert "shop/pricing.py" not in result.result.output.split("\n", 1)[1]
+    report = verification.run(workspace)
+    assert not report.all_passed
+
+
+def test_scope_check_only_runs_when_a_scope_is_configured(git_repo, tmp_path):
+    from coding_harness.verification import Verification
+    from coding_harness.workspace import Workspace
+
+    workspace = Workspace.create(git_repo, "HEAD", tmp_path / "runs")
+    assert [c.name for c in Verification(FakeEnvironment(), {}, {}).run(workspace).checks] == []
+    names = [c.name for c in Verification(FakeEnvironment(), {}, {}, allowed_paths=["x"]).run(workspace).checks]
+    assert names == ["scope"]

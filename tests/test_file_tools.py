@@ -197,3 +197,47 @@ def test_rejected_edit_shows_the_numbered_lines_it_would_produce(tools, repo):
     with pytest.raises(ToolError) as excinfo:
         tools.edit_file("handlers.py", "    raise InvalidSku(line)\n", "    raise InvalidSku(line\n")
     assert "   7 |         raise InvalidSku(line" in str(excinfo.value)
+
+
+# --- allowed scope: writes only inside allowed_paths, reads unaffected ---
+
+
+@pytest.fixture
+def scoped(repo):
+    return RepositoryTools(repo, allowed_paths=["shop/pricing.py", "docs/**"])
+
+
+def test_edit_inside_scope_works(scoped):
+    scoped.edit_file("shop/pricing.py", "- 1  # bug", "")
+    assert "# bug" not in scoped.read_file("shop/pricing.py")
+
+
+def test_edit_outside_scope_is_denied_and_changes_nothing(scoped, repo):
+    before = (repo / "shop" / "cart.py").read_text()
+    with pytest.raises(PermissionDenied, match="outside the allowed scope.*shop/pricing.py"):
+        scoped.edit_file("shop/cart.py", "total(cart)", "0")
+    assert (repo / "shop" / "cart.py").read_text() == before
+
+
+def test_write_outside_scope_is_denied_even_for_new_files(scoped, repo):
+    with pytest.raises(PermissionDenied, match="outside the allowed scope"):
+        scoped.write_file("tests/test_new.py", "x = 1\n")
+    assert not (repo / "tests").exists()
+
+
+def test_glob_with_double_star_allows_nested_new_files(scoped, repo):
+    scoped.write_file("docs/a/b.md", "hi")
+    assert (repo / "docs" / "a" / "b.md").read_text() == "hi"
+
+
+def test_reading_outside_scope_is_still_allowed(scoped):
+    assert "def checkout" in scoped.read_file("shop/cart.py")
+
+
+def test_path_tricks_do_not_escape_the_scope(scoped):
+    with pytest.raises(PermissionDenied):
+        scoped.edit_file("shop/../shop/cart.py", "total(cart)", "0")
+
+
+def test_no_allowed_paths_means_no_restriction(tools):
+    tools.write_file("anything/new.txt", "x")

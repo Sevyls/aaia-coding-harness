@@ -5,7 +5,8 @@ Open points from a critical review of the Stage 1 requirements (course handout
 
 ## Gaps
 
-- [ ] **Enforce the allowed scope, not just show it.**
+- [x] **Enforce the allowed scope, not just show it.** Done: `allowed_paths` in `[target]`; file
+  tools deny other writes, final `scope` check fails on other changed files.
   The scope in `harness.toml` ("change only `handlers.py` and, if needed, `model.py`; do not
   modify or delete existing tests") is only shown to the model and the reviewer. The file tools
   enforce just the boundary of the repository copy, so the agent may edit `tests/unit/*`. The

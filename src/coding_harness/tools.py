@@ -7,7 +7,8 @@ import hashlib
 import os
 import re
 import warnings
-from pathlib import Path
+from collections.abc import Sequence
+from pathlib import Path, PurePosixPath
 
 from pyflakes import checker as pyflakes_checker
 from pyflakes import messages as pyflakes_messages
@@ -35,8 +36,10 @@ class RepositoryTools:
         max_write_chars: int = 100_000,
         max_list_entries: int = 400,
         max_search_matches: int = 100,
+        allowed_paths: Sequence[str] = (),
     ) -> None:
         self.root = root.resolve()
+        self.allowed_paths = tuple(allowed_paths)
         self.max_write_chars = max_write_chars
         self.max_list_entries = max_list_entries
         self.max_search_matches = max_search_matches
@@ -66,6 +69,15 @@ class RepositoryTools:
         if relative.parts and relative.parts[0] == ".git":
             raise PermissionDenied("the .git directory is off limits")
         return resolved
+
+    def require_writable(self, target: Path) -> None:
+        """Writes are limited to ``allowed_paths`` (reads are not). Nothing is written when refused."""
+        relative = self.display(target)
+        if not in_scope(relative, self.allowed_paths):
+            raise PermissionDenied(
+                f"{relative!r} is outside the allowed scope; files you may change: "
+                + ", ".join(self.allowed_paths)
+            )
 
     def display(self, path: Path) -> str:
         return path.relative_to(self.root).as_posix() or "."
@@ -119,6 +131,7 @@ class RepositoryTools:
         ``old_text`` may match ignoring indentation, and ``new_text`` is re-indented when that is
         the only way to keep the file valid Python. A correct edit is applied exactly as sent."""
         target = self.resolve(path)
+        self.require_writable(target)
         text = self._read_text(target, path)
         count = text.count(old_text)
         if count > 1:
@@ -160,6 +173,7 @@ class RepositoryTools:
 
     def write_file(self, path: str, content: str) -> str:
         target = self.resolve(path)
+        self.require_writable(target)
         if target.is_dir():
             raise ToolError(f"{path!r} is a directory")
         existed = target.is_file()
@@ -269,6 +283,11 @@ class RepositoryTools:
             f"{names}; the file was not changed. Define or import them first, then use them. "
             "The changed file would look like this:\n" + _numbered(content, min(added.values()))
         )
+
+
+def in_scope(relative: str, allowed_paths: Sequence[str]) -> bool:
+    """Whether a repository-relative POSIX path matches one of the glob patterns (none: all)."""
+    return not allowed_paths or any(PurePosixPath(relative).full_match(p) for p in allowed_paths)
 
 
 def _not_unique(path: str, count: int) -> ToolError:

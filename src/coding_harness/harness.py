@@ -53,6 +53,7 @@ def run_task(
         max_write_chars=limits.max_write_chars,
         max_list_entries=limits.max_list_entries,
         max_search_matches=limits.max_search_matches,
+        allowed_paths=config.target.allowed_paths,
     )
     # The agent's environment has no acceptance mount: it never sees the acceptance check.
     lint = config.verification.lint
@@ -145,7 +146,8 @@ def _verification(config: HarnessConfig, workspace: Workspace, env_factory: EnvF
     if config.verification.acceptance_dir is not None:
         mounts.append(Mount(config.verification.acceptance_dir, "/acceptance", read_only=True))
     v = config.verification
-    return Verification(env_factory(workspace.repo, mounts), v.acceptance, v.regression, lint=v.lint)
+    return Verification(env_factory(workspace.repo, mounts), v.acceptance, v.regression, lint=v.lint,
+                        allowed_paths=config.target.allowed_paths)
 
 
 def _finish(report: RunReport) -> RunReport:

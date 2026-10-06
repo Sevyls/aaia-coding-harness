@@ -34,6 +34,9 @@ class TargetConfig(_Section):
     source: Path  # the target repository; the agent only ever sees a disposable clone
     commit: str
     scope: str = ""  # which files or behaviour the task may change, shown to the model
+    # Glob patterns (relative to the repository root, ** allowed) for the files the agent may
+    # write. Enforced by the file tools and again by a final check. Empty: no restriction.
+    allowed_paths: list[str] = Field(default_factory=list)
 
 
 class LimitsConfig(_Section):
