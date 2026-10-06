@@ -51,7 +51,7 @@ flowchart LR
     T --> S["sandbox.py<br/>ContainerSandbox<br/>configured checks only"]
     S --> P["process.py<br/>run_bounded: timeout,<br/>output limit, kill group"]
     H --> W["workspace.py<br/>disposable git clone · diff"]
-    H --> V["verification.py<br/>acceptance · regression · lint"]
+    H --> V["verification.py<br/>acceptance · regression · lint · scope"]
     V --> S
     V --> LI["lint.py<br/>new problems only"]
     H --> RV["review.py<br/>Reviewer: second model,<br/>advisory"]
@@ -79,7 +79,7 @@ flowchart TD
     A[Read task and scope] --> B[Ask model for action]
     B -->|model error after retries| F
     B -->|no tool call, or finish| R{Review enabled,<br/>diff non-empty?}
-    R -->|no| F[Run final checks in sandbox<br/>+ lint · collect diff]
+    R -->|no| F[Run final checks in sandbox<br/>+ lint · scope · collect diff]
     R -->|yes| RV[Second model reviews<br/>task, scope, diff]
     RV -->|approved, or no rounds left| F
     RV -->|changes requested| B
@@ -161,24 +161,47 @@ surviving a crash: `tests/test_verification.py::test_events_are_logged_as_they_h
 - **Target:** [cosmicpython/code](https://github.com/cosmicpython/code) at commit `14c84797ffa77255d53cf1a02fe6aafda2b68aeb`
 - **Bug:** allocating an order line with a quantity of zero or less is accepted. A negative
   quantity even *increases* the batch's available stock (10 → 15 for −5) and publishes an
-  `Allocated` event. The path runs `commands.Allocate` → message bus → `handlers.allocate` →
-  `model.Product` / `model.Batch`.
-- **Task:** [`tasks/invalid-quantity.md`](tasks/invalid-quantity.md). The task names the
-  exception `handlers.InvalidQuantity`, because the acceptance check depends on that interface.
-- **Allowed scope:** `service_layer/handlers.py` and, if needed, `domain/model.py`, enforced by
+  `Allocated` event, and `POST /allocate` answers 202 (or 500 once something raises). The path runs
+  `flask_app` → `commands.Allocate` → message bus → `handlers.allocate` → `model.Product` / `model.Batch`.
+- **Task:** [`tasks/invalid-quantity.md`](tasks/invalid-quantity.md). The task does not name a
+  solution or an exception type. It asks for a rejection from the allocation flow with unchanged
+  stock, and for status 400 with a JSON `message` from `POST /allocate`, as for an unknown SKU.
+- **Allowed scope:** `service_layer/handlers.py`, `entrypoints/flask_app.py` and, if needed,
+  `domain/model.py`, enforced by
   `allowed_paths` (file tools and final `scope` check). Existing tests must not change.
-- **Acceptance check:** [`acceptance/test_invalid_quantity.py`](acceptance/test_invalid_quantity.py).
-  On the starting commit, `baseline` reports 2 failed and 1 passed. A reference fix (checked in a
-  throwaway copy, not in the repository) gives 3 passed, and the 20 existing unit tests still pass.
+- **Acceptance check:** [`acceptance/invalid-quantity/`](acceptance/invalid-quantity/test_invalid_quantity.py) (shared fakes in `acceptance/conftest.py`).
+  It checks two levels on in-memory fakes: the message bus (any exception, stock unchanged) and
+  the real Flask app through its test client (400, a JSON `message`, stock unchanged). On the
+  starting commit, `baseline` reports 4 failed and 2 passed (the two positive-quantity tests).
+  After the agent's change all 6 pass and the 20 existing unit tests still pass.
 - **Manual help during the agent run:** none.
 
 Runs with qwen3.8:27b (traces are kept locally under `.harness/runs/`):
 
 | Run | Task given | Result |
 |---|---|---|
-| `20260927-214256`, `20260927-215753`, `20260928-202511` | `tasks/invalid-quantity.md` | VERIFIED: the same 6-line fix each time, 5 model calls, 7 actions, 0 denied, 11,564 prompt tokens in the last run |
+| `20260927-214256`, `20260927-215753`, `20260928-202511` | earlier version of `tasks/invalid-quantity.md` (bus only, named `handlers.InvalidQuantity`) | VERIFIED: the same 6-line fix each time, 5 model calls, 7 actions, 0 denied, 11,564 prompt tokens in the last run |
 | `20260927-214641` | only the word "invalid-quantity.md" (a usage error) | NOT VERIFIED: the model guessed `qty < 0`, claimed success, and the acceptance check failed for `qty = 0`. The CLI now rejects one-word tasks. |
-| `20261004-222903` | `tasks/invalid-quantity.md`, Windows, final harness with lint | VERIFIED: acceptance, the 20 unit tests and lint pass; 4 model calls, 7 actions, 0 denied, 8,934 prompt tokens |
+| `20261004-222903` | earlier version of the task, Windows, final harness with lint | VERIFIED: acceptance, the 20 unit tests and lint pass; 4 model calls, 7 actions, 0 denied, 8,934 prompt tokens |
+| `20261006-182952` | current `tasks/invalid-quantity.md` (no exception name, API must answer 400), `allowed_paths` enforced | VERIFIED: acceptance (6 tests), the 20 unit tests, lint and scope pass; changed `handlers.py` and `flask_app.py`; 6 model calls, 11 actions, 0 denied |
+
+### Second task: negative batch quantity
+
+A second, similar task shows that the harness is not tuned to one bug: creating a stock batch
+with a negative quantity is accepted. [`tasks/negative-batch.md`](tasks/negative-batch.md) asks to
+reject it and to answer `POST /add_batch` with 400 and a `message`. Its acceptance check is
+[`acceptance/negative-batch/`](acceptance/negative-batch/test_negative_batch.py) and its settings
+are in `harness.negative-batch.toml`: the same as `harness.example.toml`, with another acceptance
+directory.
+
+```bash
+uv run coding-harness baseline -c harness.negative-batch.toml                                  # 2 failed, 3 passed
+uv run coding-harness run -c harness.negative-batch.toml --task-file tasks/negative-batch.md   # VERIFIED
+```
+
+| Run | Result |
+|---|---|
+| `20261006-183355-d5e9a1` (qwen3.8:27b) | VERIFIED: acceptance (5 tests), the 20 unit tests, lint and scope pass; changed `handlers.py` and `flask_app.py`; 8 model calls, 13 actions, 0 denied |
 
 Runs with the smaller qwen2.5-coder:7b, and the harness changes they led to, are in
 [docs/experiments.md](docs/experiments.md).
@@ -196,8 +219,8 @@ uv run coding-harness run --task-file tasks/invalid-quantity.md # 3. the agent f
 | Step | Expected result |
 |---|---|
 | 1. `pytest` | `124 passed` |
-| 2. `baseline` | `acceptance` **failed** (2 failed, 1 passed), `unit_tests`, `lint` and `scope` passed, `NOT VERIFIED` |
-| 3. `run` | Steps such as `read_file` and `edit_file` on `handlers.py`, then a diff that adds `class InvalidQuantity(Exception)` and `if cmd.qty <= 0: raise InvalidQuantity(...)` in `allocate`. `acceptance`, `unit_tests`, `lint` and `scope` passed, `VERIFIED`, exit code 0 |
+| 2. `baseline` | `acceptance` **failed** (4 failed, 2 passed), `unit_tests`, `lint` and `scope` passed, `NOT VERIFIED` |
+| 3. `run` | Steps such as `read_file` and `edit_file` on `handlers.py` and `flask_app.py`, then a diff that rejects `qty <= 0` in `allocate` with an exception and maps it to a 400 response in `allocate_endpoint`. `acceptance`, `unit_tests`, `lint` and `scope` passed, `VERIFIED`, exit code 0 |
 
 qwen3.8:27b needs about 17 GB of RAM or VRAM; with it, step 3 took 1–3 minutes on the test
 machine (a cold model load adds time). The model runs at temperature 0, but the exact steps and
@@ -207,13 +230,11 @@ of your runs writes its own trace under `.harness/runs/<id>/`, and its path is p
 
 ## Known limitations
 
-- **The HTTP API still answers 500.** The verified fix makes the handler raise `InvalidQuantity`,
-  but `entrypoints/flask_app.py` only maps `InvalidSku` to 400, so `POST /allocate` with
-  `qty <= 0` returns 500. The acceptance check goes through the message bus and does not cover the
-  API. A check proves only what it tests.
+- **The API check uses fakes.** The Flask test uses the real app but an in-memory repository, so
+  it does not cover Postgres, Redis or the `e2e` tests. A check proves only what it tests.
 - **Regression coverage.** Only the 20 unit tests run as regression checks. Six integration tests
   would also run offline (SQLite); two need Postgres or Mailhog.
-- **One task.** The evidence is one task with a few runs per model, not a success rate.
+- **Two tasks.** The evidence is two small tasks with a few runs per model, not a success rate.
 - **Guardrails use the harness's Python.** `ast.parse` and pyflakes use Python 3.13 grammar,
   while the target runs on Python 3.9; newer syntax passes them and is caught by the tests.
 - **Environment not fully pinned.** The base image `python:3.9-slim` and the target's

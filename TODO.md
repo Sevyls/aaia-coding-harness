@@ -27,14 +27,13 @@ Open points from a critical review of the Stage 1 requirements (course handout
 - [ ] **Run more existing tests as regression checks.** Only the 20 unit tests run. Six
   integration tests would also run offline (SQLite); add them to `[verification.regression]`.
 
-- [ ] **Show that the extras generalise.** The guardrails, lint and loop detection were all
+- [x] **Show that the extras generalise.** Done with a second task (`tasks/negative-batch.md`),
+  the points below are the original reasoning. The guardrails, lint and loop detection were all
   derived from failures on this one task. A second small task would show whether they help
   elsewhere. Not required by the handout.
 
-- [ ] **Decide how to present the hint in the task.** `tasks/invalid-quantity.md` names
-  `handlers.InvalidQuantity` because the acceptance check needs that interface. Documented, but a
-  strict reviewer may count it as help on the solution; "manual help: none" covers the agent run
-  only.
+- [x] **Decide how to present the hint in the task.** Done: the task no longer names an
+  exception; the acceptance check is behavioural (any exception, API answers 400).
 
 - [ ] **Pin what can drift.** The base image `python:3.9-slim`, the target's `requirements.txt`
   and the model tag `qwen3.8:27b` can change over time. Record the model digest

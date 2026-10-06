@@ -56,9 +56,9 @@ acceptance_dir = "acceptance"
 lint = true                 # final check: no new pyflakes problems or E402 in changed files
 
 [verification.acceptance]
-# tasks/invalid-quantity.md: must fail on the starting commit, pass after the fix.
+# tasks/negative-batch.md: must fail on the starting commit, pass after the fix.
 # One directory per task; --rootdir loads the shared fakes in acceptance/conftest.py.
-acceptance = ["pytest", "-p", "no:cacheprovider", "--rootdir=/acceptance", "/acceptance/invalid-quantity"]
+acceptance = ["pytest", "-p", "no:cacheprovider", "--rootdir=/acceptance", "/acceptance/negative-batch"]
 
 [verification.regression]
 unit_tests = ["pytest", "-p", "no:cacheprovider", "tests/unit"]

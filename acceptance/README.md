@@ -7,3 +7,6 @@ starting commit and pass after the agent's change.
   them. The final verification mounts this directory read-only at `/acceptance`.
 - Configure the command under `[verification.acceptance]` in `harness.toml`.
 - Confirm the check fails on the starting code with `uv run coding-harness baseline`.
+
+One directory per task (`invalid-quantity/`, `negative-batch/`). `conftest.py` holds the
+in-memory fakes they share; the acceptance command passes `--rootdir=/acceptance` so it is loaded.
