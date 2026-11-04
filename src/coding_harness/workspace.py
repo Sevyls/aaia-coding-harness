@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -51,6 +52,25 @@ class Workspace:
         _git(["remote", "remove", "origin"], cwd=repo)  # nothing to push to
         head = _git(["rev-parse", "HEAD"], cwd=repo).strip()
         return cls(run_dir=run_dir, repo=repo, commit=head)
+
+    @classmethod
+    def open(cls, run_dir: Path, commit: str) -> Workspace:
+        """Reopen a saved copy. Its HEAD must still be the starting commit."""
+        repo = run_dir / "repo"
+        if not (repo / ".git").exists():
+            raise WorkspaceError(f"the session's working copy is missing: {repo}")
+        head = _git(["rev-parse", "HEAD"], cwd=repo).strip()
+        if head != commit:
+            raise WorkspaceError(f"HEAD of the working copy is {head}, not the starting commit {commit}")
+        return cls(run_dir=run_dir, repo=repo, commit=head)
+
+    def fingerprint(self) -> str:
+        """Hash of HEAD plus every change in the working copy, including new files.
+
+        Equal fingerprints mean the copy is exactly as it was, the harness's own edits included.
+        """
+        head = _git(["rev-parse", "HEAD"], cwd=self.repo).strip()
+        return hashlib.sha256(f"{head}\0{self.diff()}".encode("utf-8")).hexdigest()
 
     def changed_files(self) -> list[tuple[str, str]]:
         """(status, path) pairs, e.g. ("M", "src/app.py") or ("A", "src/new.py")."""

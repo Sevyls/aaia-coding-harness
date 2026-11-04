@@ -7,25 +7,26 @@ workspace_dir = ".harness/runs"
 provider = "ollama"
 name = "qwen3.8:27b"           # qwen2.5-coder:3b is faster but guesses and misses files
 host = "http://localhost:11434"
-temperature = 0.0
+# Qwen's sampling for thinking mode. At temperature 0 (greedy) qwen3.8:27b sometimes reasoned in
+# circles until the 10-minute timeout, and every retry repeated it exactly (docs/experiments.md).
+temperature = 0.6
+top_p = 0.95
+top_k = 20
 request_timeout = 600
-# context_window = 32768       # Ollama num_ctx; unset uses the server's default
+context_window = 32768         # Ollama num_ctx (tokens); [context] max_chars sends at most ~15k tokens.
+                               # Applied when Ollama loads the model (18 GB here instead of 22-26 GB)
 
-[target]
+# The projects a user may select (--project). Tasks name their project; with one project,
+# --project is optional. Task, scope, allowed files and acceptance checks live in tasks/*.toml.
+[projects.cosmic-python]
 # https://github.com/cosmicpython/code, cloned into ./code
 source = "code"
 commit = "14c84797ffa77255d53cf1a02fe6aafda2b68aeb"
-scope = """
-Change only src/allocation/service_layer/handlers.py, src/allocation/entrypoints/flask_app.py
-and, if needed, src/allocation/domain/model.py. Do not modify or delete existing tests.
-"""
-# Enforced: the file tools refuse writes elsewhere, and a final check fails if any other
-# file changed. Glob patterns relative to the repository; empty list: no restriction.
-allowed_paths = [
-    "src/allocation/service_layer/handlers.py",
-    "src/allocation/entrypoints/flask_app.py",
-    "src/allocation/domain/model.py",
-]
+image = "harness-cosmic-python"
+
+# Commands the agent may run by name with run_check. Unit tests need no database.
+[projects.cosmic-python.checks]
+unit_tests = ["pytest", "-p", "no:cacheprovider", "tests/unit"]
 
 [limits]
 max_steps = 30              # model requests
@@ -33,11 +34,20 @@ max_actions = 40            # tool requests, executed or denied
 max_denied = 5
 max_repeated_actions = 4    # same request, repository unchanged (or same write); whole run; 0 disables
 max_model_retries = 2
+max_fix_rounds = 3          # edit-test-fix: failed agent checks sent back after "finish"; whole run
 tool_output_chars = 8000    # longer tool results are shortened and marked
+
+# What the model sees with each request, in characters (about 4 per token). The system prompt
+# and the task are always sent in full; older steps are summarized, then long outputs shortened.
+[context]
+max_chars = 60000           # fits a 32k-token context window with room for the reply
+keep_recent = 10            # newest messages sent verbatim
+map_chars = 4000            # repository map at the start
+select_files = 3            # files shown at the start, chosen by words shared with the task
+file_chars = 6000           # per selected file
 
 [sandbox]
 engine = "podman"
-image = "harness-cosmic-python"
 network = "none"
 memory = "1g"
 cpus = 2
@@ -46,22 +56,10 @@ repo_read_only = true       # only the harness file tools write to the repositor
 command_timeout = 180
 output_limit = 20000
 
-# Commands the agent may run by name with run_check. Unit tests need no database.
-[checks]
-unit_tests = ["pytest", "-p", "no:cacheprovider", "tests/unit"]
-
 [verification]
 # Kept outside the agent's writable area; mounted read-only at /acceptance for final checks only.
 acceptance_dir = "acceptance"
 lint = true                 # final check: no new pyflakes problems or E402 in changed files
-
-[verification.acceptance]
-# tasks/invalid-quantity.md: must fail on the starting commit, pass after the fix.
-# One directory per task; --rootdir loads the shared fakes in acceptance/conftest.py.
-acceptance = ["pytest", "-p", "no:cacheprovider", "--rootdir=/acceptance", "/acceptance/invalid-quantity"]
-
-[verification.regression]
-unit_tests = ["pytest", "-p", "no:cacheprovider", "tests/unit"]
 
 # Second-model review of the diff after the agent proposes completion. Advisory: findings go
 # back to the agent at most max_rounds times, but only the final checks decide VERIFIED.

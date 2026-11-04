@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from coding_harness.domain import ToolCall
+from coding_harness.navigation import Navigator
 from coding_harness.sandbox import ExecutionEnvironment
 from coding_harness.tools import RepositoryTools
 
@@ -44,6 +45,18 @@ class EditFileArgs(Args):
 class WriteFileArgs(Args):
     path: str = Field(description="File path relative to the repository root")
     content: str = Field(description="Complete new file content")
+
+
+class NameArgs(Args):
+    name: str = Field(min_length=1, description="Class, function, method or variable name, e.g. allocate")
+
+
+class ModulePathArgs(Args):
+    path: str = Field(description="Python file relative to the repository root")
+
+
+class NoArgs(Args):
+    pass
 
 
 class FinishArgs(Args):
@@ -116,7 +129,13 @@ def check_names(checks: Mapping[str, list[str]], lint: bool) -> list[str]:
 
 
 def build_toolset(
-    repo: RepositoryTools, env: ExecutionEnvironment, checks: Mapping[str, list[str]], *, lint: bool = False
+    repo: RepositoryTools,
+    env: ExecutionEnvironment,
+    checks: Mapping[str, list[str]],
+    *,
+    lint: bool = False,
+    navigator: Navigator | None = None,
+    start_commit: str = "",
 ) -> ToolRegistry:
     tools = [
         Tool(
@@ -152,6 +171,18 @@ def build_toolset(
             writes=True,
         ),
     ]
+    if navigator is not None:
+        # Read-only, language-aware navigation (Python ast) and git state.
+        tools += [
+            Tool("find_symbol", "Find where a class, function, method or variable is defined.", NameArgs,
+                 lambda a: navigator.find_symbol(a.name)),
+            Tool("find_references", "Find where a name is used or imported (callers, dependencies).", NameArgs,
+                 lambda a: navigator.find_references(a.name)),
+            Tool("module_deps", "Show which repository modules a Python file imports, and which import it.",
+                 ModulePathArgs, lambda a: navigator.module_deps(a.path)),
+            Tool("git_status", "Show HEAD, changed files and a diff summary against the starting commit.",
+                 NoArgs, lambda a: navigator.git_status(start_commit)),
+        ]  # fmt: skip
     names = check_names(checks, lint)
     if names:
         # Only configured commands (and the built-in lint) can run; the schema lists the names.

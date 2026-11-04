@@ -24,8 +24,8 @@ Open points from a critical review of the Stage 1 requirements (course handout
 
 ## Weak points
 
-- [ ] **Run more existing tests as regression checks.** Only the 20 unit tests run. Six
-  integration tests would also run offline (SQLite); add them to `[verification.regression]`.
+- [x] **Run more existing tests as regression checks.** Done in Stage 2: each task file runs the
+  20 unit tests, the 6 offline integration tests (SQLite) and a `compileall` build check.
 
 - [x] **Show that the extras generalise.** Done with a second task (`tasks/negative-batch.md`),
   the points below are the original reasoning. The guardrails, lint and loop detection were all
@@ -36,8 +36,8 @@ Open points from a critical review of the Stage 1 requirements (course handout
   exception; the acceptance check is behavioural (any exception, API answers 400).
 
 - [ ] **Pin what can drift.** The base image `python:3.9-slim`, the target's `requirements.txt`
-  and the model tag `qwen3.8:27b` can change over time. Record the model digest
-  (`aaee06c39dcf` in `ollama list`) and consider pinning the image digest.
+  and the model tag `qwen3.8:27b` can change over time. The tag already changed: `aaee06c39dcf` in
+  Stage 1, `47951e4a6661` in Stage 2 (`ollama list`). Consider pinning the image digest.
 
 ## Checked, holds up
 
@@ -49,3 +49,12 @@ Open points from a critical review of the Stage 1 requirements (course handout
   container.
 - All 7 required test types exist, run without a model or API key, and pass on Windows.
 - Model replies, file contents and reviewer output are validated or only shown, never executed.
+
+## Stage 2 open points
+
+- [ ] **Record the Stage 2 video** with `docs/video-script-stage2.md` (at most 4 minutes).
+- [ ] **Read model of a cancelled allocation.** The acceptance check does not cover
+  `allocations_view`; a handler on SQLite could (`tests/integration/test_views.py` style).
+- [ ] **Windows:** `coding-harness cancel <id>` is POSIX only; Ctrl+C works everywhere.
+- [ ] **Stage 3:** a second feature, and a few repeated runs per task to report a success rate
+  instead of single runs.

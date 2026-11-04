@@ -25,18 +25,36 @@ class ModelConfig(_Section):
     name: str = "qwen2.5-coder:3b"
     host: str = "http://localhost:11434"
     temperature: float = 0.0
+    # Sampling for thinking models: Qwen advises temperature 0.6, top_p 0.95, top_k 20 instead of
+    # greedy decoding, which can make the reasoning go round in circles. None: the model's default.
+    top_p: float | None = Field(None, gt=0, le=1)
+    top_k: int | None = Field(None, ge=1)
     request_timeout: float = Field(600, gt=0)
     think: bool | None = None  # None leaves the model's default
     context_window: int | None = Field(None, ge=512)  # Ollama num_ctx; None uses the server default
 
 
-class TargetConfig(_Section):
+class ProjectConfig(_Section):
+    """A repository the harness may work on. Only projects listed in the settings can be selected."""
+
     source: Path  # the target repository; the agent only ever sees a disposable clone
-    commit: str
+    commit: str  # default starting commit; a task may pin its own
+    image: str | None = None  # container image for this project; None uses [sandbox].image
+    checks: dict[str, Command] = Field(default_factory=dict)  # commands the agent may run by name
+
+
+class TaskSpec(_Section):
+    """One task, saved with everything needed to run and check it again (tasks/*.toml)."""
+
+    project: str | None = None  # None: the only configured project
+    commit: str | None = None  # exact starting commit; None uses the project's
+    request: str = Field(min_length=1)
     scope: str = ""  # which files or behaviour the task may change, shown to the model
     # Glob patterns (relative to the repository root, ** allowed) for the files the agent may
-    # write. Enforced by the file tools and again by a final check. Empty: no restriction.
-    allowed_paths: list[str] = Field(default_factory=list)
+    # write. Enforced by the file tools and again by a final check.
+    allowed_paths: list[str] = Field(min_length=1)
+    acceptance: dict[str, Command] = Field(default_factory=dict)  # hidden from the agent
+    regression: dict[str, Command] = Field(default_factory=dict)
 
 
 class LimitsConfig(_Section):
@@ -45,15 +63,26 @@ class LimitsConfig(_Section):
     max_denied: int = Field(5, ge=1)
     max_repeated_actions: int = Field(4, ge=0)  # same request with the repo unchanged, or same write; whole run; 0 disables
     max_model_retries: int = Field(2, ge=0)
+    max_fix_rounds: int = Field(3, ge=0)  # failed checks sent back after a proposed completion; whole run
     tool_output_chars: int = Field(8000, ge=200)
     max_write_chars: int = Field(100_000, ge=1)
     max_list_entries: int = Field(400, ge=1)
     max_search_matches: int = Field(100, ge=1)
 
 
+class ContextConfig(_Section):
+    """What the model sees per request. Characters, not tokens: about 4 characters per token."""
+
+    max_chars: int = Field(60_000, ge=2_000)  # whole view; the pinned task and system prompt are never cut
+    keep_recent: int = Field(10, ge=0)  # newest messages kept verbatim; older ones become a summary
+    map_chars: int = Field(4_000, ge=200)  # repository map in the first context
+    select_files: int = Field(3, ge=0)  # files whose start is shown in the first context
+    file_chars: int = Field(6_000, ge=200)  # per selected file
+
+
 class SandboxConfig(_Section):
     engine: str = "podman"
-    image: str
+    image: str = ""  # usually set per project
     network: str = "none"
     memory: str = "1g"
     cpus: float = Field(2, gt=0)
@@ -67,8 +96,6 @@ class SandboxConfig(_Section):
 
 class VerificationConfig(_Section):
     acceptance_dir: Path | None = None  # mounted read-only at /acceptance, never visible to the agent
-    acceptance: dict[str, Command] = Field(default_factory=dict)
-    regression: dict[str, Command] = Field(default_factory=dict)
     lint: bool = False  # final check: the change introduces no lint problems (static, in-process)
 
 
@@ -81,12 +108,25 @@ class ReviewConfig(_Section):
 class HarnessConfig(_Section):
     workspace_dir: Path = Path(".harness/runs")
     model: ModelConfig = Field(default_factory=ModelConfig)
-    target: TargetConfig
+    projects: dict[str, ProjectConfig] = Field(min_length=1)  # the projects a user may select
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
-    sandbox: SandboxConfig
-    checks: dict[str, Command] = Field(default_factory=dict)  # commands the agent may run by name
+    context: ContextConfig = Field(default_factory=ContextConfig)
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     verification: VerificationConfig = Field(default_factory=VerificationConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
+
+    def project(self, name: str | None) -> tuple[str, ProjectConfig]:
+        """The selected project; without a name only when exactly one is configured."""
+        if name is None:
+            if len(self.projects) != 1:
+                raise ConfigError(f"choose a project: {', '.join(self.projects)}")
+            name = next(iter(self.projects))
+        if name not in self.projects:
+            raise ConfigError(f"unknown project {name!r}; allowed projects: {', '.join(self.projects)}")
+        return name, self.projects[name]
+
+    def sandbox_for(self, project: ProjectConfig) -> SandboxConfig:
+        return self.sandbox.model_copy(update={"image": project.image}) if project.image else self.sandbox
 
 
 def load_config(path: Path) -> HarnessConfig:
@@ -106,12 +146,25 @@ def load_config(path: Path) -> HarnessConfig:
     # Relative paths are relative to the config file, not the current directory.
     base = path.resolve().parent
     config.workspace_dir = base / config.workspace_dir
-    config.target.source = (base / config.target.source).resolve()
-    if not (config.target.source / ".git").exists():
-        raise ConfigError(f"target.source is not a git repository: {config.target.source}")
+    for name, project in config.projects.items():
+        project.source = (base / project.source).resolve()
+        if not (project.source / ".git").exists():
+            raise ConfigError(f"projects.{name}.source is not a git repository: {project.source}")
     if config.verification.acceptance_dir is not None:
         acceptance_dir = (base / config.verification.acceptance_dir).resolve()
         if not acceptance_dir.is_dir():
             raise ConfigError(f"verification.acceptance_dir does not exist: {acceptance_dir}")
         config.verification.acceptance_dir = acceptance_dir
     return config
+
+
+def load_task(path: Path) -> TaskSpec:
+    """Read a task file (TOML). The request, scope and checks are trusted: they come from the user."""
+    try:
+        return TaskSpec.model_validate(tomllib.loads(path.read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        raise ConfigError(f"task file not found: {path}") from None
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{path} is not valid TOML: {exc}") from None
+    except ValidationError as exc:
+        raise ConfigError(f"invalid task in {path}:\n{exc}") from None

@@ -1,10 +1,8 @@
 """The lint check counts only problems a change introduces, during the run and at the end."""
 
 import json
-from pathlib import Path
 
 from coding_harness import harness
-from coding_harness.config import HarnessConfig
 from coding_harness.domain import ToolCall
 from coding_harness.lint import new_problems
 from coding_harness.toolset import build_toolset
@@ -12,7 +10,7 @@ from coding_harness.model_client import ScriptedModelClient
 from coding_harness.tools import RepositoryTools
 from coding_harness.verification import CheckKind, CheckStatus
 
-from helpers import FakeEnvironment, call, done
+from helpers import FakeEnvironment, call, done, make_config, make_task
 
 HANDLERS = "import os\n\n\nclass InvalidSku(Exception):\n    pass\n\n\ndef path():\n    return os.sep\n"
 
@@ -69,17 +67,9 @@ def test_clean_edit_has_no_lint_warning(repo):
     assert "warning" not in message
 
 
-def make_config(source: Path, tmp_path: Path) -> HarnessConfig:
-    return HarnessConfig.model_validate({
-        "workspace_dir": tmp_path / "runs",
-        "target": {"source": source, "commit": "HEAD"},
-        "sandbox": {"image": "unused"},
-        "verification": {"acceptance": {"acceptance": ["pytest", "/acceptance"]}, "lint": True},
-    })  # fmt: skip
-
 
 def run(git_repo, tmp_path, *replies):
-    return harness.run_task(make_config(git_repo, tmp_path), "fix total",
+    return harness.run_task(make_config(git_repo, tmp_path, verification={"lint": True}), make_task(),
                             model=ScriptedModelClient([*replies, done()]),
                             env_factory=lambda repo, mounts: FakeEnvironment())  # fmt: skip
 
@@ -87,7 +77,7 @@ def run(git_repo, tmp_path, *replies):
 def test_final_lint_check_fails_on_a_new_problem_and_blocks_verified(git_repo, tmp_path):
     report = run(git_repo, tmp_path, call("edit_file", path="shop/pricing.py", old_text="def total",
                                           new_text="import os\n\n\ndef total"))  # fmt: skip
-    lint = report.verification.checks[-1]
+    lint = next(c for c in report.verification.checks if c.name == "lint")
     assert (lint.name, lint.kind, lint.status) == ("lint", CheckKind.QUALITY, CheckStatus.FAILED)
     assert "shop/pricing.py:line 1: UnusedImport 'os' imported but unused" in lint.result.output
     assert not report.verified  # the acceptance check passed, the lint check did not
@@ -96,5 +86,5 @@ def test_final_lint_check_fails_on_a_new_problem_and_blocks_verified(git_repo, t
 def test_final_lint_check_passes_on_a_clean_change(git_repo, tmp_path):
     report = run(git_repo, tmp_path, call("edit_file", path="shop/pricing.py", old_text=" - 1  # bug",
                                           new_text=""))  # fmt: skip
-    assert report.verification.checks[-1].status is CheckStatus.PASSED
+    assert next(c for c in report.verification.checks if c.name == "lint").status is CheckStatus.PASSED
     assert report.verified

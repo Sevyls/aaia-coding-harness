@@ -1,0 +1,37 @@
+# Stage 1 bug fix. Run: uv run coding-harness run --task-file tasks/negative-batch.toml
+project = "cosmic-python"
+commit = "14c84797ffa77255d53cf1a02fe6aafda2b68aeb"
+
+request = """
+Creating a stock batch with a negative quantity is currently accepted. Reject such a batch by
+raising an exception from the batch creation flow, and make sure no batch is stored.
+A quantity of zero or more stays valid.
+
+The HTTP endpoint POST /add_batch must answer such a request with status 400 and a JSON body
+with a "message" instead of an internal server error.
+"""
+
+scope = """
+Change only src/allocation/service_layer/handlers.py, src/allocation/entrypoints/flask_app.py
+and, if needed, src/allocation/domain/model.py. Do not modify or delete existing tests.
+"""
+
+# Enforced: the file tools refuse writes elsewhere, and a final check fails if any other file changed.
+allowed_paths = [
+    "src/allocation/service_layer/handlers.py",
+    "src/allocation/entrypoints/flask_app.py",
+    "src/allocation/domain/model.py",
+]
+
+# Hidden from the agent: acceptance/ is mounted read-only at /acceptance for the final checks only.
+# Must fail on the starting commit (uv run coding-harness baseline --task-file ...) and pass after.
+[acceptance]
+acceptance = ["pytest", "-p", "no:cacheprovider", "--rootdir=/acceptance", "/acceptance/negative-batch"]
+
+# Existing behaviour that must keep working. The offline integration tests use SQLite;
+# the build check compiles every module (bytecode goes to the container's /tmp).
+[regression]
+unit_tests = ["pytest", "-p", "no:cacheprovider", "tests/unit"]
+integration = ["pytest", "-p", "no:cacheprovider", "tests/integration/test_repository.py",
+               "tests/integration/test_uow.py", "tests/integration/test_views.py", "-k", "not concurrent"]
+build = ["env", "PYTHONPYCACHEPREFIX=/tmp", "python", "-m", "compileall", "-q", "src"]

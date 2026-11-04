@@ -28,7 +28,7 @@ class ScriptedModelClient:
     final reply is returned forever, which simulates a model stuck in a loop.
     """
 
-    def __init__(self, replies: Iterable[ModelResponse | Exception], repeat_last: bool = False):
+    def __init__(self, replies: Iterable[ModelResponse | BaseException], repeat_last: bool = False):
         self._replies = list(replies)
         self._repeat_last = repeat_last
         self.requests: list[list[Message]] = []  # what the controller sent, for assertions
@@ -38,7 +38,7 @@ class ScriptedModelClient:
         if not self._replies:
             raise ModelError("scripted replies exhausted")
         reply = self._replies[0] if self._repeat_last and len(self._replies) == 1 else self._replies.pop(0)
-        if isinstance(reply, Exception):
+        if isinstance(reply, BaseException):  # e.g. KeyboardInterrupt: Ctrl+C during a request
             raise reply
         return reply
 
@@ -84,6 +84,10 @@ class OllamaClient:
 
     def _options(self) -> dict[str, Any]:
         options: dict[str, Any] = {"temperature": self._config.temperature}
+        if self._config.top_p is not None:
+            options["top_p"] = self._config.top_p
+        if self._config.top_k is not None:
+            options["top_k"] = self._config.top_k
         if self._config.context_window is not None:
             options["num_ctx"] = self._config.context_window
         return options
