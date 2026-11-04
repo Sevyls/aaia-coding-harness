@@ -19,3 +19,11 @@ harness.toml
 /code/
 
 .DS_Store
+
+# Demo video: TTS model, environment and build outputs (rebuild with video/build.sh)
+video/.venv/
+video/kokoro/
+video/slides/
+video/clips/
+video/demo/
+video/*.mp4

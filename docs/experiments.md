@@ -133,8 +133,8 @@ tests, so the files to change are not named. Sampling 0.6 / 0.95 / 20, `context_
   `Deallocated` event, so nothing is re-allocated.
 - The agent's checks passed at the first `finish` (no fix round). Final checks: acceptance
   (9 tests), unit, integration, build, lint and scope passed: **VERIFIED**.
-- Not used: the navigation tools (`find_symbol`, `find_references`, `module_deps`, `git_status`),
-  again. The model explored with `read_file` and one `search`. The history stayed under the
+- Not used in this run: the navigation tools (`find_symbol`, `find_references`, `module_deps`,
+  `git_status`). The model explored with `read_file` and one `search`. The history stayed under the
   context limit (largest prompt 14,706 tokens), so no compression happened in a real run.
 - Manual help: none during the run.
 
@@ -149,3 +149,16 @@ integration, build, lint and scope passed. The bug-fix workflow from Stage 1 sti
 `tasks/negative-batch.toml`: **VERIFIED** in 2 minutes, 5 model calls, 8 actions, 0 denied;
 changed `handlers.py` and `flask_app.py`; acceptance (5 tests), unit, integration, build, lint
 and scope passed.
+
+## Runs recorded for the demo video
+
+- `20261104-182755-944080`: the first recording attempt. VHS did not see the "step 6" line, so
+  nothing cancelled the run: **VERIFIED** in 9 model calls, 20 actions.
+- `20261104-183843-affd86`, the session in the video: a helper of the recording script ran
+  `coding-harness cancel` when step 6 started (status `cancelled`, 6 of 30 steps, edits in
+  `commands.py` and `model.py`). A deliberate hand edit to `config.py` made `resume` refuse
+  (`paused`); after undoing it, `resume` continued at step 7. At step 10 the model called
+  `find_references("Deallocated")`, the first use of a navigation tool in a real run, and then
+  added its own event `DeallocatedStock` whose only handler updates `allocations_view`, avoiding
+  `reallocate`. The agent's checks passed at `finish`; final checks: acceptance (9), unit,
+  integration, build, lint, scope: **VERIFIED**. 21 model calls, 28 actions, 1 rejected edit.

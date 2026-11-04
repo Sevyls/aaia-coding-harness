@@ -52,7 +52,7 @@ Open points from a critical review of the Stage 1 requirements (course handout
 
 ## Stage 2 open points
 
-- [ ] **Record the Stage 2 video** with `docs/video-script-stage2.md` (at most 4 minutes).
+- [x] **Stage 2 video:** generated with `video/build.sh` (3:58), file `video/stage2-demo.mp4` (git-ignored).
 - [ ] **Read model of a cancelled allocation.** The acceptance check does not cover
   `allocations_view`; a handler on SQLite could (`tests/integration/test_views.py` style).
 - [ ] **Windows:** `coding-harness cancel <id>` is POSIX only; Ctrl+C works everywhere.

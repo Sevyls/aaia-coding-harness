@@ -1,5 +1,9 @@
 # Demo video script, Stage 2 (about 3:45, maximum allowed: 4:00)
 
+> The submitted video is generated instead: `video/build.sh` (slides in `video/slides.toml`, VHS
+> tapes in `video/tapes/`, narration in `video/make_demo.py`). This file is the original plan for a
+> manual recording.
+
 Shows what the Stage 2 handout asks for: selecting a project, a feature across modules, navigation,
 the bounded context, failed checks guiding fixes, cancel, safe resume (including a refused one),
 the final diff and checks, and any manual help.
