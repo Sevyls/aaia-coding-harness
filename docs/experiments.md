@@ -143,3 +143,9 @@ tests, so the files to change are not named. Sampling 0.6 / 0.95 / 20, `context_
 `tasks/invalid-quantity.toml`, same settings as run 3: **VERIFIED** in 4 minutes, 10 model calls,
 15 actions, 0 denied; changed `handlers.py` and `flask_app.py`; acceptance (6 tests), unit,
 integration, build, lint and scope passed. The bug-fix workflow from Stage 1 still works.
+
+## Second Stage 1 task with the Stage 2 harness (`20261104-180013-5467f7`)
+
+`tasks/negative-batch.toml`: **VERIFIED** in 2 minutes, 5 model calls, 8 actions, 0 denied;
+changed `handlers.py` and `flask_app.py`; acceptance (5 tests), unit, integration, build, lint
+and scope passed.
