@@ -19,7 +19,7 @@ caption = "Stage 1 fixed one bug; Stage 2 finds the code, bounds the context, an
 size = 25
 author = true
 lines = '''
-!bCLI / UI  ->  harness.py  ->  AgentController  <->  qwen3.8:27b (local Ollama)
+!bCLI       ->  harness.py  ->  AgentController  <->  qwen3.8:27b (local Ollama)
 !b                  |                 |
 !b             session.py        context.py   toolset.py -> tools.py · navigation.py · sandbox
 !b      task, checkpoints,     pinned task,   read · search · edit · find_symbol · module_deps

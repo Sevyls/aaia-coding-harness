@@ -1,7 +1,7 @@
 """Assemble the Stage 2 demo: slides plus live VHS clips, each with Kokoro narration, at most 4:00.
 
 Usage: make_demo.py OUT.mp4   (run make_slides.py and the tapes in video/tapes/ first)
-A live clip longer than its slot is sped up; a shorter one is slowed (down to 0.5x), then holds its last frame.
+A live clip is sped up or slowed (down to 0.5x) to end HOLD seconds before its slot, then holds its last frame.
 Adapted from the framework-agent lab's video build.
 """
 import subprocess
@@ -13,6 +13,7 @@ from tts import duration, narrate
 HERE = Path(__file__).parent
 WORK = HERE / "demo"
 LIMIT = 240  # seconds, the handout's maximum
+HOLD = 1.5  # seconds each clip holds its last frame, so its final output stays readable
 
 INTRO = (
     "This is Stage 2 of my coding harness. A local Qwen model works on a disposable copy of the "
@@ -31,10 +32,10 @@ BASELINE = (
     "check fails, eight failed and one passed, while the unit, integration and build checks pass."
 )
 RUN_CANCEL = (
-    "A live run with Qwen 3.8, 27 B, shown about four times faster. The model reads the events, the "
+    "A live run with Qwen 3.8, 27 B, shown about five times faster. The model reads the events, the "
     "Flask app and the message bus, then edits the commands. One edit to the domain model is rejected "
-    "by a guardrail, because it uses a name that is not defined yet. The model adds the exception and "
-    "edits again. When step six starts, a helper of the recording script runs coding harness cancel. "
+    "by a guardrail, because it uses a name that is not defined yet, so the model adds that exception "
+    "first. When step six starts, a helper of the recording script runs coding harness cancel. "
     "The run stops at once: no further action, no final checks. Status shows six of thirty steps used, "
     "and git shows the harness's own edits."
 )
@@ -57,7 +58,7 @@ RESUME = (
     "Resume again, now that the copy matches. The run continues at step seven, and the six used steps "
     "still count. The model looks up where Deallocated is used, adds its own event and the endpoint, and "
     "calls finish. The harness then runs the unit tests and lint itself. Both pass, so no fix round is "
-    "needed. Shown about thirteen times faster."
+    "needed. Shown about fourteen times faster."
 )
 RESULT = (
     "Read back from the saved session: acceptance, unit, integration and build checks, lint and scope "
@@ -104,7 +105,7 @@ def segment(n, src, seconds, text):
         video = ["-loop", "1", "-framerate", "30", "-i", str(src)]
         vf = "fps=30,format=yuv420p"
     else:
-        speed = max(duration(src) / seconds, 0.5)
+        speed = max(duration(src) / (seconds - HOLD), 0.5)
         print(f"segment {n}: {src.name} {duration(src):.1f}s played at {speed:.2f}x")
         video = ["-i", str(src)]
         vf = f"setpts=PTS/{speed},tpad=stop_mode=clone:stop_duration={seconds},fps=30,scale=1920:1080,format=yuv420p"
@@ -123,6 +124,8 @@ if __name__ == "__main__":
     listing = WORK / "list.txt"
     listing.write_text("".join(f"file '{p}'\n" for p in parts))
     out = HERE / sys.argv[1]
+    # Normalise the narration to -16 LUFS, the usual level for speech (YouTube only turns loud videos down).
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
-                    "-c", "copy", str(out)], check=True)
+                    "-c:v", "copy", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "128k",
+                    "-ar", "48000", str(out)], check=True)
     print(out, f"{duration(out):.1f}s")
