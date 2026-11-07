@@ -76,6 +76,8 @@ class StopReason(StrEnum):
     REPEAT_LIMIT = "repeat_limit"
     MODEL_ERROR = "model_error"
     INTERRUPTED = "interrupted"
+    CHECKS_FAILED = "checks_failed"  # the agent's checks still failed after the last fix round
+    CHECKS_UNAVAILABLE = "checks_unavailable"  # a check could not run; the model cannot fix that
 
 
 @dataclass
@@ -86,6 +88,7 @@ class RunStats:
     denied: int = 0
     failed: int = 0
     retries: int = 0  # repeated model requests after a model error
+    fix_rounds: int = 0  # failed checks sent back to the model after a proposed completion
     prompt_tokens: int = 0  # summed over all model requests
     completion_tokens: int = 0
     max_prompt_tokens: int = 0  # largest single prompt: how full the context window got

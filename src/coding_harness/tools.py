@@ -247,8 +247,20 @@ class RepositoryTools:
         else:
             self._written[self.display(target)] = hashlib.sha256(content.encode("utf-8")).hexdigest()
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("w", encoding="utf-8", newline="") as handle:
+        # Write a temporary file, then rename it: an interrupted write leaves the old or the new file.
+        temporary = target.with_name(f".{target.name}.harness-tmp")
+        with temporary.open("w", encoding="utf-8", newline="") as handle:
             handle.write(content)
+        os.replace(temporary, target)
+
+    def adopt(self, path: str, original: str | None) -> None:
+        """Take over a file changed before a resume: lint compares with ``original``, loop detection
+        with the current content, as if this instance had written it."""
+        target = self.resolve(path)
+        self._originals[target] = original
+        if target.is_file():
+            content = self._read_text(target, path)
+            self._written[path] = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     def _check_syntax(self, target: Path, content: str, previous: str | None) -> None:
         """Reject a change that turns valid Python into invalid Python (SWE-agent's edit guardrail).

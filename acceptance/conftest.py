@@ -29,9 +29,25 @@ class FakeRepository(repository.AbstractRepository):
         return next((p for p in self._products for b in p.batches if b.reference == batchref), None)
 
 
+class FakeSession:
+    """Stands in for the database session that read-model SQL uses (allocations_view).
+
+    The real unit of work has one, so code may use it in any handler. Statements are recorded,
+    not run; the checks assert on the domain state, not on the read model.
+    """
+
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, statement, params=None):
+        self.executed.append((" ".join(str(statement).split()), params))
+        return []
+
+
 class FakeUnitOfWork(unit_of_work.AbstractUnitOfWork):
     def __init__(self):
         self.products = FakeRepository()
+        self.session = FakeSession()
 
     def _commit(self):
         pass

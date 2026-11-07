@@ -1,5 +1,10 @@
 # Demo video script (about 2:30, maximum allowed: 4:00)
 
+> Stage 1 script, written for the Stage 1 harness (commit `401df0d`): its commands use the old
+> `.md` tasks and `harness.negative-batch.toml`. With the current harness use
+> `--task-file tasks/<name>.toml` (see the README); the Stage 2 script is
+> [video-script-stage2.md](video-script-stage2.md).
+
 Shows what the lecturer asks for: task entry, tool use, code change, diff, a failing check that
 becomes a passing one, existing tests still passing, and manual help named.
 

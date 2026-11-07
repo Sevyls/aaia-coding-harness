@@ -1,17 +1,15 @@
 """A second model reviews the diff; its findings go back to the coder, but never decide `verified`."""
 
 import json
-from pathlib import Path
 
 import pytest
 
 from coding_harness import harness
-from coding_harness.config import HarnessConfig
 from coding_harness.domain import ModelResponse
 from coding_harness.model_client import ModelError, ScriptedModelClient
 from coding_harness.review import Reviewer
 
-from helpers import FakeEnvironment, call, done
+from helpers import FakeEnvironment, call, done, make_config, make_task
 
 FIX = call("edit_file", path="shop/pricing.py", old_text=" - 1  # bug", new_text="")
 
@@ -42,19 +40,11 @@ def test_unreachable_reviewer_is_unavailable_not_approved():
     assert review.status == "unavailable" and "connection refused" in review.error
 
 
-def make_config(source: Path, tmp_path: Path, max_rounds: int = 1) -> HarnessConfig:
-    return HarnessConfig.model_validate({
-        "workspace_dir": tmp_path / "runs",
-        "target": {"source": source, "commit": "HEAD", "scope": "only shop/pricing.py"},
-        "sandbox": {"image": "unused"},
-        "verification": {"acceptance": {"acceptance": ["pytest", "/acceptance"]}},
-        "review": {"enabled": True, "max_rounds": max_rounds},
-    })  # fmt: skip
 
-
-def run(git_repo, tmp_path, coder_replies, reviewer_replies, **config):
+def run(git_repo, tmp_path, coder_replies, reviewer_replies, max_rounds=1):
     coder, reviewer = ScriptedModelClient(coder_replies), ScriptedModelClient(reviewer_replies)
-    report = harness.run_task(make_config(git_repo, tmp_path, **config), "fix total", model=coder,
+    config = make_config(git_repo, tmp_path, review={"enabled": True, "max_rounds": max_rounds})
+    report = harness.run_task(config, make_task(scope="only shop/pricing.py"), model=coder,
                               reviewer_model=reviewer, env_factory=lambda repo, mounts: FakeEnvironment())  # fmt: skip
     return report, coder, reviewer
 

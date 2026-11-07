@@ -1,0 +1,42 @@
+# Stage 2 feature. Run: uv run coding-harness run --task-file tasks/cancel-allocation.toml
+project = "cosmic-python"
+commit = "14c84797ffa77255d53cf1a02fe6aafda2b68aeb"
+
+request = """
+A customer can cancel an order line, but the allocation service has no way to release the stock
+that was allocated to it. Add a command Deallocate(orderid, sku) in allocation.domain.commands,
+handled by the message bus, that removes the order line from the batch it was allocated to so its
+quantity becomes available again. The freed stock must not be allocated to anything else.
+
+If no line of that order and SKU is allocated (unknown order or unknown SKU), reject the command
+with an exception that has a clear message, and change nothing.
+
+Add an HTTP endpoint POST /deallocate that takes JSON {"orderid": ..., "sku": ...} and answers
+status 200 on success, or status 400 with a JSON body {"message": ...} when the command is rejected.
+
+Existing commands, endpoints and their callers (allocate, add_batch, change batch quantity and the
+reallocation it triggers) must keep working unchanged.
+"""
+
+scope = """
+Change the application code under src/allocation as needed. Do not modify or delete existing tests.
+"""
+
+# Enforced: the file tools refuse writes elsewhere, and a final check fails if any other file changed.
+# Deliberately the whole package, not a list of files: the agent has to find the modules itself.
+# (Runs 1 and 2 used an earlier version that listed the five files in scope and allowed_paths.)
+# The tests live outside src/, so they stay protected.
+allowed_paths = ["src/allocation/**"]
+
+# Hidden from the agent: acceptance/ is mounted read-only at /acceptance for the final checks only.
+# Must fail on the starting commit (uv run coding-harness baseline --task-file ...) and pass after.
+[acceptance]
+acceptance = ["pytest", "-p", "no:cacheprovider", "--rootdir=/acceptance", "/acceptance/cancel-allocation"]
+
+# Existing behaviour that must keep working. The offline integration tests use SQLite;
+# the build check compiles every module (bytecode goes to the container's /tmp).
+[regression]
+unit_tests = ["pytest", "-p", "no:cacheprovider", "tests/unit"]
+integration = ["pytest", "-p", "no:cacheprovider", "tests/integration/test_repository.py",
+               "tests/integration/test_uow.py", "tests/integration/test_views.py", "-k", "not concurrent"]
+build = ["env", "PYTHONPYCACHEPREFIX=/tmp", "python", "-m", "compileall", "-q", "src"]

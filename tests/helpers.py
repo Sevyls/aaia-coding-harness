@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coding_harness.config import LimitsConfig
+from coding_harness.config import HarnessConfig, LimitsConfig, TaskSpec
 from coding_harness.controller import AgentController
 from coding_harness.domain import CommandResult, ModelResponse, ToolCall
 from coding_harness.model_client import ScriptedModelClient
@@ -54,3 +54,22 @@ def make_controller(
 def snapshot(root: Path) -> dict[str, str]:
     """All file contents under root, to prove that nothing was written."""
     return {p.relative_to(root).as_posix(): p.read_text() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def make_config(source: Path, tmp_path: Path, **sections) -> HarnessConfig:
+    """Settings with one project on ``source``; ``sections`` add or replace top-level sections."""
+    return HarnessConfig.model_validate({
+        "workspace_dir": tmp_path / "runs",
+        "projects": {"shop": {"source": source, "commit": "HEAD", "checks": {"tests": ["pytest", "-q"]}}},
+        **sections,
+    })  # fmt: skip
+
+
+def make_task(request: str = "fix total", **fields) -> TaskSpec:
+    """A task on the test repository with an acceptance check; ``fields`` replace the defaults."""
+    return TaskSpec.model_validate({
+        "request": request,
+        "allowed_paths": ["shop/**"],
+        "acceptance": {"acceptance": ["pytest", "/acceptance"]},
+        **fields,
+    })  # fmt: skip

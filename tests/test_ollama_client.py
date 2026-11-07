@@ -58,6 +58,15 @@ def test_context_window_is_left_to_the_server_by_default():
     seen = []
     client_returning({"role": "assistant", "content": "ok"}, seen).request_action([], [])
     assert "num_ctx" not in seen[0]["options"]
+    assert "top_p" not in seen[0]["options"] and "top_k" not in seen[0]["options"]
+
+
+def test_sampling_settings_are_sent():
+    seen = []
+    config = ModelConfig(name="m", temperature=0.6, top_p=0.95, top_k=20)
+    client_returning({"role": "assistant", "content": "ok"}, seen, config).request_action([], [])
+    assert {k: seen[0]["options"][k] for k in ("temperature", "top_p", "top_k")} == \
+        {"temperature": 0.6, "top_p": 0.95, "top_k": 20}  # fmt: skip
 
 
 def test_tool_call_written_as_text_is_recovered():

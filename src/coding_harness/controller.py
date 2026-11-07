@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from coding_harness.config import LimitsConfig
+from coding_harness.context import ContextManager, size, untrusted
 from coding_harness.domain import (
     Event,
     ModelResponse,
@@ -34,6 +35,8 @@ class AgentOutcome:
     stats: RunStats
     messages: list[Message]
     events: list[Event] = field(default_factory=list)
+    step: int = 0  # the last model request made; a continuation starts after it
+    seen: Counter = field(default_factory=Counter)  # loop detection over the whole run
 
 
 class AgentController:
@@ -43,13 +46,18 @@ class AgentController:
         registry: ToolRegistry,
         limits: LimitsConfig,
         on_event: Callable[[Event], None] | None = None,
+        on_checkpoint: Callable[[list[Message], RunStats, int, Counter], None] | None = None,
+        context: ContextManager | None = None,
     ) -> None:
         self.model = model
         self.registry = registry
         self.limits = limits
         self._on_event = on_event
+        # Called after every model reply and every tool result: the state a resume can start from.
+        self._on_checkpoint = on_checkpoint
+        self.context = context  # None: the whole history is sent (Stage 1 behaviour)
 
-    def run_task(self, task_message: str) -> AgentOutcome:
+    def run_task(self, task_message: str, context: str | None = None) -> AgentOutcome:
         self._stats = RunStats()
         self._events: list[Event] = []
         self._step = 0
@@ -58,16 +66,20 @@ class AgentController:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": task_message},
         ]
+        if context:  # untrusted starting context, after the pinned task: it may be summarized later
+            messages.append({"role": "user", "content": context})
         return self._run(messages, first_step=1)
 
     def continue_task(self, outcome: AgentOutcome, message: str) -> AgentOutcome:
-        """Send one more user message (e.g. review findings) in the same conversation.
+        """Send one more user message (review findings, failed checks, a resume note).
 
-        Stats, events and the step budget carry on from ``outcome``; nothing is reset.
+        Stats, events, loop detection and the step budget carry on from ``outcome``, which may come
+        from this controller or from a saved checkpoint; nothing is reset.
         """
-        self._stats, self._events = outcome.stats, outcome.events
+        self._stats, self._events, self._seen, self._step = outcome.stats, outcome.events, outcome.seen, outcome.step
         messages = outcome.messages
         messages.append({"role": "user", "content": message})
+        self._checkpoint(messages)
         return self._run(messages, first_step=self._step + 1)
 
     def _run(self, messages: list[Message], first_step: int) -> AgentOutcome:
@@ -76,7 +88,7 @@ class AgentController:
         except KeyboardInterrupt:
             reason, final = StopReason.INTERRUPTED, "stopped by the user"
         self._emit("stop", reason=str(reason), message=final)
-        return AgentOutcome(reason, final, self._stats, messages, self._events)
+        return AgentOutcome(reason, final, self._stats, messages, self._events, self._step, self._seen)
 
     def validate_action(self, call: ToolCall) -> tuple[Tool, BaseModel]:
         """Check that the tool exists and the arguments fit its schema. Raises ActionRejected."""
@@ -92,6 +104,7 @@ class AgentController:
                 return StopReason.MODEL_ERROR, "the model could not be reached"
             messages.append(_assistant_message(response))
             self._count_tokens(response)
+            self._checkpoint(messages)
             self._emit(
                 "model_reply",
                 content=response.content,
@@ -102,7 +115,7 @@ class AgentController:
             if not response.tool_calls:
                 return StopReason.COMPLETED, response.content
 
-            for call in response.tool_calls:
+            for index, call in enumerate(response.tool_calls, 1):
                 if stats.actions >= limits.max_actions:
                     self._emit("limit", limit="max_actions", value=limits.max_actions)
                     return StopReason.ACTION_LIMIT, f"stopped after {stats.actions} actions"
@@ -122,11 +135,13 @@ class AgentController:
                     where = "during the run" if state is None else "without any change to the repository in between"
                     return StopReason.REPEAT_LIMIT, f"the same {call.name!r} request was made {repeats} times {where}"
 
-                result = self._execute(call)
-                text = _tool_text(result)
+                self._checkpoint(messages)  # the state just before the action: where a resume starts
+                result = self._execute(call, op=f"{self._step}.{index}")
+                text = _tool_text(call.name, result)
                 if repeats > 1:
                     text += _repeat_note(repeats, limits.max_repeated_actions, write=state is None)
                 messages.append({"role": "tool", "tool_name": call.name, "content": text})
+                self._checkpoint(messages)
 
                 if call.name == FINISH and result.status is ToolStatus.OK:
                     return StopReason.COMPLETED, call.arguments.get("summary", "")
@@ -142,8 +157,13 @@ class AgentController:
         for attempt in range(1, attempts + 1):
             self._stats.model_calls += 1
             self._emit("model_request", attempt=attempt)
+            self._checkpoint(messages)  # a request cut off by Ctrl+C still used its step
+            view = self.context.view(messages) if self.context is not None else messages
+            if view is not messages:
+                self._emit("context", sent_chars=size(view), full_chars=size(messages), sent_messages=len(view),
+                           full_messages=len(messages))  # fmt: skip
             try:
-                return self.model.request_action(messages, tools)
+                return self.model.request_action(view, tools)
             except ModelError as exc:
                 self._emit("model_error", error=str(exc), attempt=attempt)
                 if attempt < attempts:
@@ -156,8 +176,9 @@ class AgentController:
         stats.completion_tokens += response.completion_tokens or 0
         stats.max_prompt_tokens = max(stats.max_prompt_tokens, response.prompt_tokens or 0)
 
-    def _execute(self, call: ToolCall) -> ToolResult:
-        self._emit("tool_call", name=call.name, arguments=call.arguments)
+    def _execute(self, call: ToolCall, op: str) -> ToolResult:
+        # Logged before the tool runs: a tool_call without its tool_result marks an interrupted action.
+        self._emit("tool_call", op=op, name=call.name, arguments=call.arguments, writes=self.registry.writes(call.name))
         try:
             tool, args = self.validate_action(call)
             content = tool.handler(args)
@@ -176,9 +197,13 @@ class AgentController:
             self._stats.executed += 1
             text, shortened = shorten(content, self.limits.tool_output_chars)
             result = ToolResult(ToolStatus.OK, text, shortened)
-        self._emit("tool_result", name=call.name, status=str(result.status), content=result.content,
+        self._emit("tool_result", op=op, name=call.name, status=str(result.status), content=result.content,
                    shortened=result.shortened)  # fmt: skip
         return result
+
+    def _checkpoint(self, messages: list[Message]) -> None:
+        if self._on_checkpoint is not None:
+            self._on_checkpoint(messages, self._stats, self._step, self._seen)
 
     def _emit(self, kind: str, **data: Any) -> None:
         event = Event(kind, self._step, data)
@@ -208,9 +233,11 @@ def _repeat_note(repeats: int, limit: int, *, write: bool) -> str:
     return f"\nnote: you have now made exactly this request {repeats} times. {why}{stop}"
 
 
-def _tool_text(result: ToolResult) -> str:
+def _tool_text(name: str, result: ToolResult) -> str:
+    """The status word is the harness's own; the content may carry repository text, so it is marked."""
+    content = untrusted(f"{name} result", result.content)
     if result.status is ToolStatus.DENIED:
-        return f"DENIED (nothing was executed): {result.content}"
+        return f"DENIED (nothing was executed): {content}"
     if result.status is ToolStatus.ERROR:
-        return f"ERROR: {result.content}"
-    return result.content
+        return f"ERROR: {content}"
+    return content

@@ -8,8 +8,8 @@ kept locally under `.harness/runs/<id>/` and are not in the repository.
 To reproduce with the current harness (`ollama pull qwen2.5-coder:7b` first):
 
 ```bash
-uv run coding-harness run --task-file tasks/invalid-quantity.md --model qwen2.5-coder:7b
-uv run coding-harness run --task-file tasks/invalid-quantity.md --model qwen2.5-coder:7b --review-model qwen3.8:27b
+uv run coding-harness run --task-file tasks/invalid-quantity.toml --model qwen2.5-coder:7b
+uv run coding-harness run --task-file tasks/invalid-quantity.toml --model qwen2.5-coder:7b --review-model qwen3.8:27b
 ```
 
 For the context-window runs, set `context_window = 16384` under `[model]` in `harness.toml`.
@@ -68,3 +68,97 @@ going off-task, broken or misplaced edits, success claims without checking, and 
 the runs show that the guardrails, lint, review and limits contain a weak model, stop its loops
 early with a clear reason, and report nothing false as VERIFIED. Three runs per setting are too
 few for a success rate.
+
+# Stage 2: the cancel-allocation feature with qwen3.8:27b
+
+Task: [`tasks/cancel-allocation.toml`](../tasks/cancel-allocation.toml). Machine: Mac with 48 GB
+unified memory, Ollama 0.40 (MLX runner), Podman machine running. Model id `47951e4a6661`.
+
+## Run 1 (`20261103-202856-e74504`): a defect in the acceptance check
+
+Task version that listed the five files in `scope` and `allowed_paths`; temperature 0.
+
+- 12 model calls in 5 min 20 s, 18 actions (9 `read_file`, 6 `edit_file`, 2 `run_check`, `finish`),
+  0 denied. The navigation tools were not used. The first context selected `model.py`,
+  `handlers.py` and `commands.py`, three of the four files the change needed.
+- The agent's own checks (unit tests, lint) passed, so no fix round was needed.
+- Final checks: unit, integration, build, lint and scope passed; **acceptance 6 of 9**:
+  NOT VERIFIED.
+- Cause: the new `deallocate` handler deletes the line from `allocations_view` with
+  `uow.session.execute(...)`. The real unit of work has a session; the acceptance check's fake had
+  none, so the handler crashed there. The behaviour was right, the check's fake was incomplete.
+- **Manual help:** the fake unit of work in `acceptance/conftest.py` got a `session` that records
+  SQL. Afterwards the baselines of all three tasks were unchanged (8/1, 4/2, 2/3 failed/passed),
+  and run 1's code passed all 9 acceptance tests.
+
+## Run 2 (`20261103-204319-959995`): live cancel and resume, then a model that never answered
+
+Same task version, temperature 0.
+
+- Very slow from the start: 4 steps in 13 minutes, one request ran into the 10-minute timeout.
+  Memory was at 91 % (Ollama 22–26 GB with the default 131,072-token window, Podman, other apps;
+  9 GB compressed, swapping).
+- **Cancel during a model request** (`coding-harness cancel`, 21:00): the process ended at once,
+  status `cancelled`, no further action, no final checks, no uncertain actions.
+- **Refused resume:** one line added by hand to `model.py` → `PAUSED`, nothing executed, reason
+  "working copy differs from the last checkpoint". After undoing the line, **resume** passed every
+  check and continued at step 5 (the cancelled step 4 still counted).
+- Still slow (step 7 timed out), so: second **cancel**, `ollama stop qwen3.8:27b` (manual help),
+  `context_window = 32768` set (the model then loaded with 18 GB instead of 22–26 GB), **resume**
+  at step 8.
+- Step 8 timed out three times (3 × 10 min) with memory healthy: **`model_error`**, no edits,
+  acceptance failed, every other check passed.
+- Diagnosis by replaying the step-8 request with streaming: at temperature 0 the model produced
+  10,578 characters of reasoning in 90 s, going back and forth ("OK here's my final decision …
+  Actually, I realize …") without an answer; greedy decoding repeats the same path on every retry.
+  At temperature 0.6 the same request finished in 176 s with a plan that avoided the
+  `Deallocated` trap. One sample each, so this is a strong hint, not a measurement.
+- Change: Qwen's recommended sampling for thinking mode, `temperature = 0.6`, `top_p = 0.95`,
+  `top_k = 20` (new `[model]` settings). Runs are no longer repeatable step for step; the checks
+  decide the result.
+
+## Run 3 (`20261104-173814-276a73`): hint-free task, VERIFIED
+
+Current task version: `allowed_paths = ["src/allocation/**"]`, the scope only says not to touch
+tests, so the files to change are not named. Sampling 0.6 / 0.95 / 20, `context_window = 32768`.
+
+- 25 model calls in 7 minutes, 34 actions (15 `read_file`, 14 `edit_file`, 2 `run_check`,
+  `search`, `list_files`, `finish`), 0 denied, 3 failed: one wrong path, and two edits the
+  guardrails rejected before writing (an undefined name in `model.py`, a syntax error in
+  `handlers.py`); the model corrected both.
+- Changed `commands.py`, `model.py`, `handlers.py`, `flask_app.py` (61 lines added): a
+  `Deallocate` command, `InvalidDeallocation` in the domain, `Batch.deallocate` and
+  `Product.deallocate`, a handler that also removes the line from `allocations_view`, and
+  `POST /deallocate` with 400 for `InvalidSku` and `InvalidDeallocation`. It did not reuse the
+  `Deallocated` event, so nothing is re-allocated.
+- The agent's checks passed at the first `finish` (no fix round). Final checks: acceptance
+  (9 tests), unit, integration, build, lint and scope passed: **VERIFIED**.
+- Not used in this run: the navigation tools (`find_symbol`, `find_references`, `module_deps`,
+  `git_status`). The model explored with `read_file` and one `search`. The history stayed under the
+  context limit (largest prompt 14,706 tokens), so no compression happened in a real run.
+- Manual help: none during the run.
+
+## Stage 1 task with the Stage 2 harness (`20261104-174531-576f51`)
+
+`tasks/invalid-quantity.toml`, same settings as run 3: **VERIFIED** in 4 minutes, 10 model calls,
+15 actions, 0 denied; changed `handlers.py` and `flask_app.py`; acceptance (6 tests), unit,
+integration, build, lint and scope passed. The bug-fix workflow from Stage 1 still works.
+
+## Second Stage 1 task with the Stage 2 harness (`20261104-180013-5467f7`)
+
+`tasks/negative-batch.toml`: **VERIFIED** in 2 minutes, 5 model calls, 8 actions, 0 denied;
+changed `handlers.py` and `flask_app.py`; acceptance (5 tests), unit, integration, build, lint
+and scope passed.
+
+## Runs recorded for the demo video
+
+- `20261104-182755-944080`: the first recording attempt. VHS did not see the "step 6" line, so
+  nothing cancelled the run: **VERIFIED** in 9 model calls, 20 actions.
+- `20261104-183843-affd86`, the session in the video: a helper of the recording script ran
+  `coding-harness cancel` when step 6 started (status `cancelled`, 6 of 30 steps, edits in
+  `commands.py` and `model.py`). A deliberate hand edit to `config.py` made `resume` refuse
+  (`paused`); after undoing it, `resume` continued at step 7. At step 10 the model called
+  `find_references("Deallocated")`, the first use of a navigation tool in a real run, and then
+  added its own event `DeallocatedStock` whose only handler updates `allocations_view`, avoiding
+  `reallocate`. The agent's checks passed at `finish`; final checks: acceptance (9), unit,
+  integration, build, lint, scope: **VERIFIED**. 21 model calls, 28 actions, 1 rejected edit.

@@ -1,0 +1,108 @@
+# Slide content for make_slides.py. Edit, then run: .venv/bin/python make_slides.py
+#
+# Each [[slide]] renders to slides/slideN.png (1920x1080), in order.
+#   section, time, title, caption : header and footer text
+#   size                           : monospace font size of the code panel
+#   author                         : true shows the author / AI-usage line
+#   lines                          : code panel, one row per line, verbatim (no escaping inside ''' blocks)
+# Inline colour markers switch colour for the rest of the segment:
+#   !r red   !g green   !y yellow   !b blue   !d dim grey   (no marker = default text colour)
+
+# Shown bottom-right on every slide; leave empty to hide.
+audio_note = "Narration: AI-generated voice (Kokoro TTS, af_heart)"
+
+[[slide]]
+section = "Overview"
+time = "0:00–0:22"
+title = "A coding harness for a feature across modules"
+caption = "Stage 1 fixed one bug; Stage 2 finds the code, bounds the context, and saves every step"
+size = 25
+author = true
+lines = '''
+!bCLI       ->  harness.py  ->  AgentController  <->  qwen3.8:27b (local Ollama)
+!b                  |                 |
+!b             session.py        context.py   toolset.py -> tools.py · navigation.py · sandbox
+!b      task, checkpoints,     pinned task,   read · search · edit · find_symbol · module_deps
+!b      write-ahead events     repo map, view  run_check (named checks in a container)
+
+!dNew in Stage 2
+  !gnavigation!d     where is a name defined, used, imported; git state (Python ast, read-only)
+  !gcontext!d        trusted task always in full; repository text marked <untrusted>; bounded history
+  !gfix loop!d       after "finish" the harness runs the agent's checks; failures go back, at most 3x
+  !gsessions!d       checkpoint before and after every action; cancel; resume only when safe
+  !gtask files!d     request, allowed paths, hidden acceptance and regression checks, saved per session
+'''
+
+[[slide]]
+section = "The feature task"
+time = "0:22–0:46"
+title = "The feature task: cancel an allocation"
+caption = "The task names the interface the checks need, not the files to change"
+size = 24
+author = false
+lines = '''
+!d# tasks/cancel-allocation.toml (frozen into task.json when a session starts)
+project = "cosmic-python"     commit = "14c84797ffa7..."
+request = """Add a command Deallocate(orderid, sku) ... frees the stock; unknown order or SKU
+             -> clear exception, nothing changes; POST /deallocate -> 200, or 400 + message ..."""
+scope = "Change the application code under src/allocation as needed. Do not modify tests."
+allowed_paths = ["src/allocation/**"]                  !d# enforced by the file tools and a final check
+!y[acceptance]!d  hidden from the agent, mounted read-only only for the final verification
+!y[regression]!d  20 unit tests, 6 offline integration tests (SQLite), compileall build check
+
+!dThe trap: the existing event Deallocated triggers reallocate(). Reusing it hands the stock out again.
+
+!dWhat the model sees with every request (60,000 characters, about 15k tokens):
+  !gsystem prompt + task message!d   always in full, never shortened (trusted)
+  !gstart context!d                  repository map + the 3 files that share most words with the task
+  !gnewest 10 messages!d             verbatim; older steps become one summary line each
+'''
+
+[[slide]]
+section = "Sessions"
+time = "1:49–2:10"
+title = "Checkpoints, cancel, and a resume that checks first"
+caption = "Resume never replays an interrupted action; it pauses when anything does not match"
+size = 25
+author = false
+lines = '''
+!d.harness/runs/<session>/
+  task.json          task, project settings, exact commit, limits      !d(frozen at start)
+  checkpoint.json    messages, step, counters, working-copy fingerprint !d(atomic, every action)
+  events.jsonl       tool_call before a tool runs, tool_result after    !d(write-ahead log)
+
+!ycancel!d   Ctrl+C or `coding-harness cancel <id>`: kill the command's process group and
+         container, keep the last checkpoint, no further action, no final checks
+
+!yresume!d   checks first, runs nothing until all hold:
+  1. the project is still allowed, with the same source, commit, image and checks
+  2. HEAD is still the starting commit
+  3. the working copy's fingerprint (HEAD + diff, incl. the harness's edits) is unchanged
+  4. every changed file is inside the allowed paths
+  !rmismatch -> paused!d, reason shown; !gall hold -> continue!d with the consumed budget,
+  and tool calls without a result are listed to the model, never replayed
+'''
+
+[[slide]]
+section = "Results and limits"
+time = "3:35–3:58"
+title = "Real runs with qwen3.8:27b, and what they did not show"
+caption = "A finished run is not proof: only the hidden acceptance and regression checks decide VERIFIED"
+size = 23
+author = true
+lines = '''
+!dcancel-allocation, files not named (temperature 0.6)
+  !g20261104-173814!d   VERIFIED   25 model calls, 7 min
+  !g20261104-182755!d   VERIFIED    9 model calls (not cancelled: recording trigger missed)
+  !g20261104-183843!d   VERIFIED   this video: cancel at step 6, refused resume, resume; 21 calls
+!dearlier task version, files named (temperature 0)
+  !y20261103-202856!d   6 of 9     the check's fake unit of work lacked a session  !r(manual help: fake fixed)
+  !y20261103-204319!d   model_error  live cancel/resume; reasoning looped  !r(manual help: model unloaded)
+!dStage 1 bug fixes with the Stage 2 harness
+  !ginvalid-quantity, negative-batch!d   both VERIFIED
+
+!dNot shown by real runs
+  - navigation: find_references used once (this video), the other tools never
+  - history compression: largest prompt 14.7k tokens, under the limit; shown by the tests only
+  - cancel from another terminal is POSIX only; the 166 harness tests need no model or container
+'''

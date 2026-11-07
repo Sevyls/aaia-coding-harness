@@ -103,7 +103,7 @@ def test_large_tool_output_is_bounded_and_marked(repo):
 
     content = model.requests[1][-1]["content"]
     assert "[... output shortened by the harness:" in content
-    assert len(content) < 1100
+    assert len(content) < 1100 + 60  # plus the <untrusted> wrapper
     assert outcome.events[3].data["shortened"] is True
 
 
