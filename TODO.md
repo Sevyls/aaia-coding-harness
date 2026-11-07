@@ -18,9 +18,8 @@ Open points from a critical review of the Stage 1 requirements (course handout
   final check fails if a changed file is outside. Or mount the original tests read-only into the
   regression container. Touches `config.py`, `tools.py`, `verification.py`, plus tests.
 
-- [ ] **Record the demo video** (at most 4 minutes). Suggested flow: `baseline` (acceptance check
-  fails), `run --task-file tasks/invalid-quantity.md` with qwen3.8:27b (diff, VERIFIED),
-  optionally 30 seconds of a qwen2.5-coder:7b run where the guardrails and limits stop it.
+- [x] **Record the demo video** (at most 4 minutes). Done for Delivery 1
+  (https://www.youtube.com/watch?v=ZJSGpN5TdXw), plan in `docs/video-script.md`.
 
 ## Weak points
 
