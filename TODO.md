@@ -26,7 +26,7 @@ Open points from a critical review of the Stage 1 requirements (course handout
 - [x] **Run more existing tests as regression checks.** Done in Stage 2: each task file runs the
   20 unit tests, the 6 offline integration tests (SQLite) and a `compileall` build check.
 
-- [x] **Show that the extras generalise.** Done with a second task (`tasks/negative-batch.md`),
+- [x] **Show that the extras generalise.** Done with a second task (`tasks/negative-batch.toml`),
   the points below are the original reasoning. The guardrails, lint and loop detection were all
   derived from failures on this one task. A second small task would show whether they help
   elsewhere. Not required by the handout.
@@ -51,7 +51,7 @@ Open points from a critical review of the Stage 1 requirements (course handout
 
 ## Stage 2 open points
 
-- [x] **Stage 2 video:** generated with `video/build.sh` (3:58), file `video/stage2-demo.mp4` (git-ignored).
+- [x] **Stage 2 video:** generated with `video/build.sh` (3:58), file `video/stage2-demo.mp4` (git-ignored), on YouTube: https://www.youtube.com/watch?v=LjXr7r7AgOY.
 - [ ] **Read model of a cancelled allocation.** The acceptance check does not cover
   `allocations_view`; a handler on SQLite could (`tests/integration/test_views.py` style).
 - [ ] **Windows:** `coding-harness cancel <id>` is POSIX only; Ctrl+C works everywhere.
